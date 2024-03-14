@@ -1,4 +1,3 @@
-
 use std::cell::RefCell;
 
 use crate::*;
@@ -6,22 +5,19 @@ use once_cell::sync::Lazy;
 
 pub static ARROW_SYM: Lazy<Symbol> = Lazy::new(|| Symbol::from("->"));
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnifyErr {
     Occurs,
     ConcreteSubtree,
-    Production
+    Production,
 }
 pub type UnifyResult = Result<(), UnifyErr>;
-
-
 
 /// TNodes are members of TypeSets
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TNode {
     Var(usize), // type variable like t0 t1 etc; index is used to index into a Context not the TypeSet.
-    Arrow(Args,Idx), // arrow type
+    Arrow(Args, Idx), // arrow type
     Term(Symbol, Args),
 }
 
@@ -36,7 +32,6 @@ pub enum Args {
 }
 
 impl Args {
-
     // get the arity
     pub fn len(&self) -> usize {
         match self {
@@ -52,7 +47,13 @@ impl Args {
     pub fn get(&self, i: usize) -> Option<Idx> {
         match self {
             Args::Args0 => None,
-            Args::Args1(a) => if i == 0 { Some(*a) } else { None },
+            Args::Args1(a) => {
+                if i == 0 {
+                    Some(*a)
+                } else {
+                    None
+                }
+            }
             Args::Args2(a, b) => match i {
                 0 => Some(*a),
                 1 => Some(*b),
@@ -69,10 +70,11 @@ impl Args {
     }
 
     /// iterate over the arguments
-    pub fn iter(&self) -> impl ExactSizeIterator<Item=Idx> + DoubleEndedIterator<Item=Idx> + '_ {
+    pub fn iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = Idx> + DoubleEndedIterator<Item = Idx> + '_ {
         (0..self.len()).map(move |i| self.get(i).unwrap())
     }
-        
 }
 
 impl From<Vec<Idx>> for Args {
@@ -86,8 +88,6 @@ impl From<Vec<Idx>> for Args {
         }
     }
 }
-
-
 
 /// An index into a typeset, which implies shifting any Var at the idx by `shift`.
 /// If set[idx] is a Var then shift it and lookup what it points to in the Context
@@ -114,13 +114,12 @@ impl Type {
 pub struct TypeSet {
     pub nodes: Vec<TNode>,
     pub max_var: Vec<Option<usize>>,
-    pub subst: RefCell<Vec<(usize,Type)>>,
+    pub subst: RefCell<Vec<(usize, Type)>>,
     pub next_var: usize,
     pub tmp: RefCell<Vec<Type>>,
 }
 
 impl TypeSet {
-
     /// This is the usual way of creating a new Context. The context will be append-only
     /// meaning you can roll it back to a point by truncating
     pub fn empty() -> TypeSet {
@@ -133,11 +132,11 @@ impl TypeSet {
         }
     }
 
-    pub fn save_state(&self) -> (usize,usize) {
+    pub fn save_state(&self) -> (usize, usize) {
         (self.subst.borrow().len(), self.next_var)
     }
 
-    pub fn load_state(&mut self, state: (usize,usize)) {
+    pub fn load_state(&mut self, state: (usize, usize)) {
         self.subst.borrow_mut().truncate(state.0);
         self.next_var = state.1;
     }
@@ -158,9 +157,7 @@ impl TypeSet {
 
     pub fn add_tp(&mut self, tp: &SlowType) -> Idx {
         match tp {
-            SlowType::Var(i) => {
-                self.add_node(TNode::Var(*i))
-            }
+            SlowType::Var(i) => self.add_node(TNode::Var(*i)),
             SlowType::Term(p, args) => {
                 if tp.is_arrow() {
                     let return_tp = self.add_tp(tp.return_type());
@@ -170,15 +167,16 @@ impl TypeSet {
                     let args: Vec<Idx> = args.iter().map(|arg| self.add_tp(arg)).collect();
                     self.add_node(TNode::Term(p.clone(), Args::from(args)))
                 }
-            },
+            }
         }
     }
     #[inline(always)]
     pub fn add_node(&mut self, node: TNode) -> Idx {
         let max_var = match &node {
             TNode::Var(i) => Some(*i),
-            TNode::Term(_, args) | TNode::Arrow(args, _) =>
-                args.iter().filter_map(|arg| self.max_var[arg]).max(),
+            TNode::Term(_, args) | TNode::Arrow(args, _) => {
+                args.iter().filter_map(|arg| self.max_var[arg]).max()
+            }
         };
         self.max_var.push(max_var);
         self.nodes.push(node);
@@ -188,10 +186,10 @@ impl TypeSet {
     // #[inline(never)]
     /// this doesnt actually seem to save time
     pub fn might_unify(&self, t1: &Type, t2: &Type) -> bool {
-        let (node1,t1) = t1.node(self);
-        let (node2,t2) = t2.node(self);
+        let (node1, t1) = t1.node(self);
+        let (node2, t2) = t2.node(self);
 
-        match (node1,node2) {
+        match (node1, node2) {
             (TNode::Arrow(_, _), TNode::Term(_, _)) | (TNode::Term(_, _), TNode::Arrow(_, _)) => {
                 return false;
             }
@@ -199,7 +197,9 @@ impl TypeSet {
                 if args1.len() != args2.len() {
                     return false;
                 }
-                if !args1.iter().zip(args2.iter()).all(|(a1,a2)| self.might_unify(&Type::new(a1,t1.shift),&Type::new(a2,t2.shift))) {
+                if !args1.iter().zip(args2.iter()).all(|(a1, a2)| {
+                    self.might_unify(&Type::new(a1, t1.shift), &Type::new(a2, t2.shift))
+                }) {
                     return false;
                 }
             }
@@ -207,7 +207,9 @@ impl TypeSet {
                 if p1 != p2 || args1.len() != args2.len() {
                     return false;
                 }
-                if !args1.iter().zip(args2.iter()).all(|(a1,a2)| self.might_unify(&Type::new(a1,t1.shift),&Type::new(a2,t2.shift))) {
+                if !args1.iter().zip(args2.iter()).all(|(a1, a2)| {
+                    self.might_unify(&Type::new(a1, t1.shift), &Type::new(a2, t2.shift))
+                }) {
                     return false;
                 }
             }
@@ -220,16 +222,15 @@ impl TypeSet {
     /// it still). See unify_cached() for amortized unionfind. Note that this is likely not slower
     /// than unify_cached() in most cases.
     // #[inline(never)]
-    pub fn unify(&self, t1: &Type,  t2: &Type) -> UnifyResult {
-
+    pub fn unify(&self, t1: &Type, t2: &Type) -> UnifyResult {
         // if !self.might_unify(t1,t2) {
         //     return Err(UnifyErr::Production);
         // }
 
-        let (node1,t1) = t1.node(self);
-        let (node2,t2) = t2.node(self);
+        let (node1, t1) = t1.node(self);
+        let (node2, t2) = t2.node(self);
 
-        match (node1,node2) {
+        match (node1, node2) {
             (TNode::Var(i1), _) => {
                 let i1_shifted = i1 + t1.shift;
                 // check for identical variable (only needs to happen on this match case bc later one cant have a Var for both)
@@ -239,7 +240,9 @@ impl TypeSet {
                     }
                 }
                 // *** "occurs" check, which prevents recursive definitions of types. Removing it would allow them.
-                if t2.occurs_nonrecursive(i1_shifted, self) { return Err(UnifyErr::Occurs) } // recursive type  e.g. unify(t0, (t0 -> int)) -> false
+                if t2.occurs_nonrecursive(i1_shifted, self) {
+                    return Err(UnifyErr::Occurs);
+                } // recursive type  e.g. unify(t0, (t0 -> int)) -> false
 
                 // set the varisble
                 debug_assert!(self.get_var(i1_shifted).is_none());
@@ -249,7 +252,9 @@ impl TypeSet {
             (_, TNode::Var(i2)) => {
                 let i2_shifted = i2 + t2.shift;
                 // *** "occurs" check, which prevents recursive definitions of types. Removing it would allow them.
-                if t1.occurs_nonrecursive(i2_shifted, self) { return Err(UnifyErr::Occurs) } // recursive type  e.g. unify(t0, (t0 -> int)) -> false
+                if t1.occurs_nonrecursive(i2_shifted, self) {
+                    return Err(UnifyErr::Occurs);
+                } // recursive type  e.g. unify(t0, (t0 -> int)) -> false
 
                 // set the varisble
                 debug_assert!(self.get_var(i2_shifted).is_none());
@@ -257,30 +262,28 @@ impl TypeSet {
                 Ok(())
             }
 
-            (TNode::Term(x, xs), TNode::Term(y, ys)) =>
-            {
+            (TNode::Term(x, xs), TNode::Term(y, ys)) => {
                 // simply recurse
                 if x != y || xs.len() != ys.len() {
-                    return Err(UnifyErr::Production)
+                    return Err(UnifyErr::Production);
                 }
 
-                for (x,y) in xs.iter().zip(ys.iter()) {
-                    self.unify(&Type::new(x,t1.shift),&Type::new(y,t2.shift))?;
+                for (x, y) in xs.iter().zip(ys.iter()) {
+                    self.unify(&Type::new(x, t1.shift), &Type::new(y, t2.shift))?;
                 }
                 Ok(())
             }
-            (TNode::Arrow(xargs, xret), TNode::Arrow(yargs, yret)) =>
-            {
+            (TNode::Arrow(xargs, xret), TNode::Arrow(yargs, yret)) => {
                 // simply recurse
                 if xargs.len() != yargs.len() {
-                    return Err(UnifyErr::Production)
+                    return Err(UnifyErr::Production);
                 }
 
-                for (x,y) in xargs.iter().zip(yargs.iter()) {
-                    self.unify(&Type::new(x,t1.shift),&Type::new(y,t2.shift))?;
+                for (x, y) in xargs.iter().zip(yargs.iter()) {
+                    self.unify(&Type::new(x, t1.shift), &Type::new(y, t2.shift))?;
                 }
 
-                self.unify(&Type::new(*xret,t1.shift),&Type::new(*yret,t2.shift))?;
+                self.unify(&Type::new(*xret, t1.shift), &Type::new(*yret, t2.shift))?;
                 Ok(())
             }
             (TNode::Arrow(_, _), TNode::Term(_, _)) | (TNode::Term(_, _), TNode::Arrow(_, _)) => {
@@ -299,22 +302,20 @@ impl TypeSet {
     /// get what a variable is bound to (if anything).
     #[inline(always)]
     fn get_var(&self, var: usize) -> Option<Type> {
-        self.subst.borrow().iter().rfind(|(i,_)| *i == var).map(|(_,tp)| tp.clone())
+        self.subst
+            .borrow()
+            .iter()
+            .rfind(|(i, _)| *i == var)
+            .map(|(_, tp)| tp.clone())
     }
     /// set what a variable is bound to
     #[inline(always)]
     fn set_var(&self, var: usize, ty: Type) {
-        self.subst.borrow_mut().push((var,ty));
+        self.subst.borrow_mut().push((var, ty));
     }
-
-
-
 }
 
-
-
 impl Type {
-
     /// get our node and shift.
     /// - If we are not a Var we just return our own node and shift.
     /// - If we are a Var we lookup what it points to in the subst (when our shift is added) and return that, not applying our own shift.
@@ -336,10 +337,10 @@ impl Type {
                     // println!("eep");
                     // set.set_var(*i + ret.shift, tp); // cache it
                     // assert_eq!(set.get_var(*i + ret.shift), Some(tp));
-                    continue
+                    continue;
                 }
             }
-            return ret
+            return ret;
         }
     }
 
@@ -352,16 +353,18 @@ impl Type {
         while !worklist.is_empty() {
             let (node, tp) = worklist.pop().unwrap().node(set);
             match node {
-                TNode::Var(j) => if i == j + tp.shift {
-                    return true
-                },
+                TNode::Var(j) => {
+                    if i == j + tp.shift {
+                        return true;
+                    }
+                }
                 TNode::Term(_, args) => {
                     worklist.extend(args.iter().rev().map(|x| Type::new(x, tp.shift)))
-                },
+                }
                 TNode::Arrow(args, ret_tp) => {
-                    worklist.push(Type::new(*ret_tp,tp.shift));
+                    worklist.push(Type::new(*ret_tp, tp.shift));
                     worklist.extend(args.iter().rev().map(|x| Type::new(x, tp.shift)));
-                },
+                }
             }
         }
         false
@@ -370,14 +373,15 @@ impl Type {
     pub fn occurs(&self, i: usize, set: &TypeSet) -> bool {
         let (node, tp) = self.node(set);
         match node {
-            TNode::Var(j)  => i == j + tp.shift,
-            TNode::Term(_, args) => {
-                args.iter().any(|arg| Type::new(arg,tp.shift).occurs(i, set))
-            },
+            TNode::Var(j) => i == j + tp.shift,
+            TNode::Term(_, args) => args
+                .iter()
+                .any(|arg| Type::new(arg, tp.shift).occurs(i, set)),
             TNode::Arrow(args, ret_tp) => {
-                args.iter().any(|arg| Type::new(arg,tp.shift).occurs(i, set))
-                || Type::new(*ret_tp,tp.shift).occurs(i, set)
-            },
+                args.iter()
+                    .any(|arg| Type::new(arg, tp.shift).occurs(i, set))
+                    || Type::new(*ret_tp, tp.shift).occurs(i, set)
+            }
         }
     }
 
@@ -389,7 +393,10 @@ impl Type {
         }
     }
 
-    pub fn iter_args<'a>(&self, set: &'a TypeSet) -> impl ExactSizeIterator<Item=Type> + DoubleEndedIterator<Item=Type> + 'a {
+    pub fn iter_args<'a>(
+        &self,
+        set: &'a TypeSet,
+    ) -> impl ExactSizeIterator<Item = Type> + DoubleEndedIterator<Item = Type> + 'a {
         let (node, tp) = self.node(set);
         match node {
             TNode::Arrow(args, _) => args.iter().map(move |arg| Type::new(arg, tp.shift)),
@@ -413,5 +420,3 @@ impl Type {
         }
     }
 }
-
-

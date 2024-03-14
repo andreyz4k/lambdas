@@ -1,11 +1,10 @@
 use crate::*;
 
-use std::fmt::{Debug};
-use std::hash::Hash;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::time::{Instant,Duration};
-use serde::{Serialize, Deserialize};
-
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::time::{Duration, Instant};
 
 // /// env[i] is the value at $i
 // pub type Env<D> = Vec<Val<D>>;
@@ -23,7 +22,7 @@ impl<D: Domain> Env<D> {
         self.env.push(v);
     }
     pub fn push_front(&mut self, v: Val<D>) {
-        self.env.insert(0,v);
+        self.env.insert(0, v);
     }
     pub fn pop_back(&mut self) -> Val<D> {
         self.env.pop().unwrap()
@@ -65,13 +64,11 @@ pub enum Val<D: Domain> {
     Dom(D),
     PrimFun(CurriedFn<D>), // function ptr, arity, any args that have been partially filled in
     LamClosure(Idx, Env<D>), // body, captured env
-    Thunk(Idx, Env<D>)
+    Thunk(Idx, Env<D>),
 }
 
-pub type VResult<D> = Result<Val<D>,VError>;
+pub type VResult<D> = Result<Val<D>, VError>;
 pub type VError = String;
-
-
 
 #[derive(Debug)]
 pub struct Evaluator<'a, D: Domain> {
@@ -82,20 +79,28 @@ pub struct Evaluator<'a, D: Domain> {
 }
 
 impl<'a> Expr<'a> {
-    pub fn eval<D:Domain>(&self, env: &Env<D>, dsl: &DSL<D>, timelimit: Option<Duration>) -> VResult<D> {
+    pub fn eval<D: Domain>(
+        &self,
+        env: &Env<D>,
+        dsl: &DSL<D>,
+        timelimit: Option<Duration>,
+    ) -> VResult<D> {
         self.as_eval(dsl, timelimit).eval_child(self.idx, env)
     }
-    pub fn as_eval<D:Domain>(self, dsl: &'a DSL<D>, timelimit: Option<Duration>) -> Evaluator<'a, D> {
-        let start_and_timelimit = timelimit.map(|d| (Instant::now(),d));
+    pub fn as_eval<D: Domain>(
+        self,
+        dsl: &'a DSL<D>,
+        timelimit: Option<Duration>,
+    ) -> Evaluator<'a, D> {
+        let start_and_timelimit = timelimit.map(|d| (Instant::now(), d));
         Evaluator {
             expr: self,
             data: Default::default(),
             start_and_timelimit,
-            dsl
+            dsl,
         }
     }
 }
-
 
 /// Wraps a DSL function in a struct that manages currying of the arguments
 /// which are fed in one at a time through .apply(). Example: the "+" primitive
@@ -131,7 +136,13 @@ impl<D: Domain> CurriedFn<D> {
     pub fn apply(mut self, arg: Val<D>, handle: &Evaluator<D>) -> VResult<D> {
         self.partial_args.push_back(arg);
         if self.partial_args.len() == self.arity {
-            handle.dsl.productions.get(&self.name).unwrap().fn_ptr.unwrap() (self.partial_args, handle)
+            handle
+                .dsl
+                .productions
+                .get(&self.name)
+                .unwrap()
+                .fn_ptr
+                .unwrap()(self.partial_args, handle)
         } else {
             Ok(Val::PrimFun(self))
         }
@@ -139,25 +150,23 @@ impl<D: Domain> CurriedFn<D> {
 }
 
 impl<D: Domain> Val<D> {
-    pub fn dom(self) -> Result<D,VError> {
+    pub fn dom(self) -> Result<D, VError> {
         match self {
             Val::Dom(d) => Ok(d),
-            _ => Err("Val::unwrap_dom: not a domain value".into())
+            _ => Err("Val::unwrap_dom: not a domain value".into()),
         }
     }
     #[inline(always)]
     pub fn unthunk(&self, handle: &Evaluator<D>) -> VResult<D> {
-        if let Val::Thunk(idx,env) = self {
-            return handle.eval_child(*idx, &env)
+        if let Val::Thunk(idx, env) = self {
+            return handle.eval_child(*idx, &env);
         }
         // else {
         //     Ok(self.clone())
         // }
         panic!("unthunk(): not a thunk");
     }
-    
 }
-
 
 impl<D: Domain> From<D> for Val<D> {
     fn from(d: D) -> Self {
@@ -166,17 +175,16 @@ impl<D: Domain> From<D> for Val<D> {
 }
 
 pub trait FromVal<D: Domain>: Sized {
-    fn from_val(val: Val<D>) -> Result<Self,VError>;
+    fn from_val(val: Val<D>) -> Result<Self, VError>;
 }
 
 impl<D: Domain> FromVal<D> for Val<D> {
-    fn from_val(val: Val<D>) -> Result<Self,VError> {
+    fn from_val(val: Val<D>) -> Result<Self, VError> {
         Ok(val)
     }
 }
 
-
-impl<'a, D: Domain> Evaluator<'a,D> {
+impl<'a, D: Domain> Evaluator<'a, D> {
     // apply a function (Val) to an argument (LazyVal)
     pub fn apply(&self, f: Val<D>, x: Val<D>) -> VResult<D> {
         match f {
@@ -202,17 +210,22 @@ impl<'a, D: Domain> Evaluator<'a,D> {
             }
         }
         let val = match self.expr.get_node(child) {
-            Node::Var(i, _) => {
-                env.get(*i as usize).clone()
-            }
+            Node::Var(i, _) => env.get(*i as usize).clone(),
             Node::IVar(_) => {
                 panic!("attempting to execute a #i ivar")
             }
-            Node::App(f,x) => {
+            Node::App(f, x) => {
                 let f_val = self.eval_child(*f, env)?;
 
                 let x_val = if let Val::PrimFun(func) = &f_val {
-                    if self.dsl.productions.get(&func.name).unwrap().lazy_args.contains(&func.partial_args.len()) {
+                    if self
+                        .dsl
+                        .productions
+                        .get(&func.name)
+                        .unwrap()
+                        .lazy_args
+                        .contains(&func.partial_args.len())
+                    {
                         Val::Thunk(*x, env.clone())
                     } else {
                         self.eval_child(*x, env)?
@@ -220,18 +233,14 @@ impl<'a, D: Domain> Evaluator<'a,D> {
                 } else {
                     self.eval_child(*x, env)?
                 };
-                
+
                 self.apply(f_val, x_val)?
             }
-            Node::Prim(p) => {
-                match self.dsl.val_of_prim(p) {
-                    Some(v) => v,
-                    None => panic!("Prim `{}` not found",p),
-                }
-            }
-            Node::Lam(b, _) => {
-                Val::LamClosure(*b, env.clone())
-            }
+            Node::Prim(p) => match self.dsl.val_of_prim(p) {
+                Some(v) => v,
+                None => panic!("Prim `{}` not found", p),
+            },
+            Node::Lam(b, _) => Val::LamClosure(*b, env.clone()),
         };
         Ok(val)
     }

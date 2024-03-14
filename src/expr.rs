@@ -1,11 +1,11 @@
+use crate::*;
+use once_cell::sync::Lazy;
+use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::{Index, IndexMut, Range};
-use once_cell::sync::Lazy;
-use serde::{Serialize, Deserialize};
-use std::cmp::{min,max};
-use rustc_hash::FxHashMap;
-use crate::*;
 
 pub type Idx = usize;
 pub type Tag = i32;
@@ -16,16 +16,14 @@ pub const HOLE: Idx = usize::MAX;
 
 pub static HOLE_SYM: Lazy<Symbol> = Lazy::new(|| Symbol::from("??"));
 
-
 /// A node of an untyped lambda calculus expression. Indexing with an Idx like set[i] yields
 /// a Node, while set.get(i) yields an Expr representing the subtree at that node.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Node where
-{
-    Prim(Symbol), // primitive (eg functions, constants, all nonvariable leaf nodes)
+pub enum Node {
+    Prim(Symbol),  // primitive (eg functions, constants, all nonvariable leaf nodes)
     Var(i32, Tag), // db index ($i), tag
-    IVar(i32), // abstraction ("invention") variable
-    App(Idx,Idx), // f, x
+    IVar(i32),     // abstraction ("invention") variable
+    App(Idx, Idx), // f, x
     Lam(Idx, Tag), // body, tag
 }
 
@@ -35,7 +33,7 @@ pub struct ExprSet {
     pub nodes: Vec<Node>,
     pub spans: Option<Vec<Range<Idx>>>,
     pub order: Order,
-    pub struct_hash: Option<FxHashMap<Node,Idx>>,
+    pub struct_hash: Option<FxHashMap<Node, Idx>>,
 }
 
 /// the ordering of nodes in an ExprSet
@@ -43,21 +41,21 @@ pub struct ExprSet {
 pub enum Order {
     ChildFirst,
     ParentFirst,
-    Any
+    Any,
 }
 
 /// a read-only view into an ExprSet
-#[derive(Clone,Copy, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Expr<'a> {
     pub set: &'a ExprSet,
-    pub idx: Idx 
+    pub idx: Idx,
 }
 
 /// a mutable view into an ExprSet
 #[derive(Debug)]
 pub struct ExprMut<'a> {
     pub set: &'a mut ExprSet,
-    pub idx: Idx 
+    pub idx: Idx,
 }
 
 /// an owned expression
@@ -72,27 +70,37 @@ impl ExprOwned {
         Self { set, idx }
     }
     pub fn immut(&self) -> Expr<'_> {
-        Expr { set: &self.set, idx: self.idx }
+        Expr {
+            set: &self.set,
+            idx: self.idx,
+        }
     }
     pub fn as_mut(&mut self) -> ExprMut<'_> {
-        ExprMut { set: &mut self.set, idx: self.idx }
+        ExprMut {
+            set: &mut self.set,
+            idx: self.idx,
+        }
     }
     pub fn cost(&self, cost_fn: &ExprCost) -> i32 {
         assert!(self.set.struct_hash.is_none());
-        self.set.iter().map(|i|
-            match self.set.get(i).node() {
+        self.set
+            .iter()
+            .map(|i| match self.set.get(i).node() {
                 Node::IVar(_) => cost_fn.cost_ivar,
                 Node::Var(_, _) => cost_fn.cost_var,
-                Node::Prim(p) => *cost_fn.cost_prim.get(p).unwrap_or(&cost_fn.cost_prim_default),
+                Node::Prim(p) => *cost_fn
+                    .cost_prim
+                    .get(p)
+                    .unwrap_or(&cost_fn.cost_prim_default),
                 Node::App(_, _) => cost_fn.cost_app,
                 Node::Lam(_, _) => cost_fn.cost_lam,
-            }).sum::<i32>()
+            })
+            .sum::<i32>()
     }
     pub fn depth(&self) -> usize {
         *AnalyzedExpr::new(DepthAnalysis).analyze_get(self.immut())
     }
 }
-
 
 impl Index<Idx> for ExprSet {
     type Output = Node;
@@ -126,14 +134,26 @@ impl ExprSet {
     pub fn empty(order: Order, spans: bool, struct_hash: bool) -> ExprSet {
         let spans = if spans { Some(vec![]) } else { None };
         if struct_hash {
-            assert_eq!(order,Order::ChildFirst, "struct_hash=true requires order=ChildFirst");
+            assert_eq!(
+                order,
+                Order::ChildFirst,
+                "struct_hash=true requires order=ChildFirst"
+            );
         }
-        let struct_hash = if struct_hash { Some(Default::default()) } else { None };
-        ExprSet { nodes: vec![], spans, order, struct_hash }
+        let struct_hash = if struct_hash {
+            Some(Default::default())
+        } else {
+            None
+        };
+        ExprSet {
+            nodes: vec![],
+            spans,
+            order,
+            struct_hash,
+        }
     }
     /// add a Node to an ExprSet
     pub fn add(&mut self, node: Node) -> Idx {
-
         // look up in struct hash and simply return it if already present
         if let Some(struct_hash) = &self.struct_hash {
             if let Some(&idx) = struct_hash.get(&node) {
@@ -145,9 +165,12 @@ impl ExprSet {
         // push on a new span if we're tracking spans
         if let Some(spans) = &mut self.spans {
             let span = match node {
-                Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) => idx .. idx+1,
-                Node::App(f, x) => min(min(spans[f].start,spans[x].start),idx) .. max(max(spans[f].end,spans[x].end),idx+1),
-                Node::Lam(b, _) => min(spans[b].start,idx) .. max(spans[b].end,idx+1)
+                Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) => idx..idx + 1,
+                Node::App(f, x) => {
+                    min(min(spans[f].start, spans[x].start), idx)
+                        ..max(max(spans[f].end, spans[x].end), idx + 1)
+                }
+                Node::Lam(b, _) => min(spans[b].start, idx)..max(spans[b].end, idx + 1),
             };
             spans.push(span);
         }
@@ -174,7 +197,10 @@ impl ExprSet {
     }
     #[inline(always)]
     pub fn hole(&self) -> Expr {
-        Expr { set: self, idx: HOLE }
+        Expr {
+            set: self,
+            idx: HOLE,
+        }
     }
     /// number of Nodes in ExprSet
     pub fn len(&self) -> usize {
@@ -189,11 +215,10 @@ impl ExprSet {
         self.nodes.truncate(len);
     }
     /// returns an iterator over the Idxs from 0 to the max Idx
-    pub fn iter(&self) -> impl ExactSizeIterator<Item=Idx> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = Idx> {
         0..self.nodes.len()
     }
 }
-
 
 impl<'a> Expr<'a> {
     /// get a subexpression
@@ -211,27 +236,27 @@ impl<'a> Expr<'a> {
     pub fn node(&self) -> &Node {
         &self.set[self.idx]
     }
-    pub fn children(&self) -> impl Iterator<Item=Idx> {
+    pub fn children(&self) -> impl Iterator<Item = Idx> {
         match self.node() {
             Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) => vec![].into_iter(),
             Node::App(f, x) => vec![*f, *x].into_iter(),
-            Node::Lam(b, _) => vec![*b].into_iter()
+            Node::Lam(b, _) => vec![*b].into_iter(),
         }
     }
     /// assuming this is an App, get the subexpression to the left
     #[inline(always)]
     pub fn left(&self) -> Self {
         match self.node() {
-            Node::App(f,_) => self.get(*f),
-            _ => panic!("get_left called on non-App")
+            Node::App(f, _) => self.get(*f),
+            _ => panic!("get_left called on non-App"),
         }
     }
     /// assuming this is an App, get the subexpression to the right
     #[inline(always)]
     pub fn right(&self) -> Self {
         match self.node() {
-            Node::App(_,x) => self.get(*x),
-            _ => panic!("get_right called on non-App")
+            Node::App(_, x) => self.get(*x),
+            _ => panic!("get_right called on non-App"),
         }
     }
     /// assuming this is a Lam, get the subexpression in the body
@@ -239,29 +264,37 @@ impl<'a> Expr<'a> {
     pub fn body(&self) -> Self {
         match self.node() {
             Node::Lam(b, _) => self.get(*b),
-            _ => panic!("get_body called on non-Lam")
+            _ => panic!("get_body called on non-Lam"),
         }
     }
     /// get the span of this Expr
     pub fn get_span(&self) -> Option<Range<Idx>> {
-        self.set.spans.as_ref().map(|spans| spans.get(self.idx).unwrap().clone())
+        self.set
+            .spans
+            .as_ref()
+            .map(|spans| spans.get(self.idx).unwrap().clone())
     }
     /// iterate over the Idxs in the span of this Expr
-    pub fn iter_span(&self) -> impl ExactSizeIterator<Item=Idx> {
+    pub fn iter_span(&self) -> impl ExactSizeIterator<Item = Idx> {
         self.get_span().unwrap()
     }
     /// get the cost of this Expr by assuming that span() contains
     /// each node in the expression exactly once
     pub fn cost_span(&self, cost_fn: &ExprCost) -> i32 {
         assert!(self.set.struct_hash.is_none());
-        let res = self.iter_span().map(|i|
-            match self.set.get(i).node() {
+        let res = self
+            .iter_span()
+            .map(|i| match self.set.get(i).node() {
                 Node::IVar(_) => cost_fn.cost_ivar,
                 Node::Var(_, _) => cost_fn.cost_var,
-                Node::Prim(p) => *cost_fn.cost_prim.get(p).unwrap_or(&cost_fn.cost_prim_default),
+                Node::Prim(p) => *cost_fn
+                    .cost_prim
+                    .get(p)
+                    .unwrap_or(&cost_fn.cost_prim_default),
                 Node::App(_, _) => cost_fn.cost_app,
                 Node::Lam(_, _) => cost_fn.cost_lam,
-            }).sum::<i32>();
+            })
+            .sum::<i32>();
         debug_assert_eq!(res, self.cost_rec(cost_fn));
         res
     }
@@ -273,13 +306,14 @@ impl<'a> Expr<'a> {
         match self.node() {
             Node::IVar(_) => cost_fn.cost_ivar,
             Node::Var(_, _) => cost_fn.cost_var,
-            Node::Prim(p) => *cost_fn.cost_prim.get(p).unwrap_or(&cost_fn.cost_prim_default),
+            Node::Prim(p) => *cost_fn
+                .cost_prim
+                .get(p)
+                .unwrap_or(&cost_fn.cost_prim_default),
             Node::App(f, x) => {
                 cost_fn.cost_app + self.get(*f).cost_rec(cost_fn) + self.get(*x).cost_rec(cost_fn)
             }
-            Node::Lam(b, _) => {
-                cost_fn.cost_lam + self.get(*b).cost_rec(cost_fn)
-            }
+            Node::Lam(b, _) => cost_fn.cost_lam + self.get(*b).cost_rec(cost_fn),
         }
     }
 
@@ -292,7 +326,9 @@ impl<'a> Expr<'a> {
             let node = self.get_node(i);
             match node {
                 Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => node.clone(),
-                Node::App(f, x) => Node::App((*f as i32 + shift) as usize, (*x as i32 + shift) as usize),
+                Node::App(f, x) => {
+                    Node::App((*f as i32 + shift) as usize, (*x as i32 + shift) as usize)
+                }
                 Node::Lam(b, tag) => Node::Lam((*b as i32 + shift) as usize, *tag),
             }
         }));
@@ -301,7 +337,7 @@ impl<'a> Expr<'a> {
         if let Some(other_spans) = &mut other_set.spans {
             other_spans.extend(self.iter_span().map(|i| {
                 let span = self.get(i).get_span().unwrap();
-                (span.start as i32 + shift) as usize .. (span.end as i32 + shift) as usize
+                (span.start as i32 + shift) as usize..(span.end as i32 + shift) as usize
             }))
         }
 
@@ -326,16 +362,13 @@ impl<'a> Expr<'a> {
 
     /// copy this Expr onto the end of another ExprSet by upshifting
     /// all indices appropriately. This is order-aware. This takes a recursive approach so it
-    /// is slower than copy_span but it won't unnecessarily copy anything and 
+    /// is slower than copy_span but it won't unnecessarily copy anything and
     /// will maintain structural hashing
     pub fn copy_rec(self, other_set: &mut ExprSet) -> Idx {
-
         assert_eq!(self.set.order, other_set.order);
         fn helper(e: Expr, other_set: &mut ExprSet) -> Idx {
             match e.node() {
-                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => {
-                    other_set.add(e.node().clone())
-                }
+                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => other_set.add(e.node().clone()),
                 Node::App(f, x) => {
                     let f = helper(e.get(*f), other_set);
                     let x = helper(e.get(*x), other_set);
@@ -357,7 +390,9 @@ impl<'a> Expr<'a> {
             Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => true,
             Node::App(f, x) => match self.set.order {
                 Order::ChildFirst => (*f == HOLE || *f < self.idx) && (*x == HOLE || *x < self.idx),
-                Order::ParentFirst => (*f == HOLE || *f > self.idx) && (*x == HOLE || *x > self.idx),
+                Order::ParentFirst => {
+                    (*f == HOLE || *f > self.idx) && (*x == HOLE || *x > self.idx)
+                }
                 Order::Any => *f != self.idx && *x != self.idx,
             },
             Node::Lam(b, _) => match self.set.order {
@@ -396,26 +431,29 @@ impl<'a> ExprMut<'a> {
     #[inline(always)]
     pub fn immut(&'a self) -> Expr<'a> {
         // let ExprMut {set, idx} = self;
-        Expr {set: self.set, idx: self.idx}
+        Expr {
+            set: self.set,
+            idx: self.idx,
+        }
     }
 
     /// Fill the first hole at this node with the pointer `idx`. Panics if there is no hole or
     /// if this is not a Lam or App. Prefers filling the left hole of an App over the right.
     pub fn expand(&mut self, idx: Idx) {
         match self.node() {
-            Node::App(x,y) => {
+            Node::App(x, y) => {
                 if *x == HOLE {
                     *x = idx;
                 } else {
                     assert_eq!(*y, HOLE, "invalid expand() on non-hole");
-                    *y = idx;    
+                    *y = idx;
                 }
-            },
+            }
             Node::Lam(b, _) => {
                 assert_eq!(*b, HOLE, "invalid expand() on non-hole");
                 *b = idx
             }
-            _ => panic!("invalid expand() on non-lam non-app: {:?}", self.node())
+            _ => panic!("invalid expand() on non-lam non-app: {:?}", self.node()),
         }
         debug_assert!(self.immut().node_order_safe());
     }
@@ -424,15 +462,18 @@ impl<'a> ExprMut<'a> {
     /// the lefthand side of an App. Panics if no hole is found.
     pub fn expand_right(&mut self, idx: Idx) {
         match self.node() {
-            Node::App(_,y) => {
+            Node::App(_, y) => {
                 assert_eq!(*y, HOLE, "invalid expand_right() on non-hole");
                 *y = idx;
-            },
+            }
             Node::Lam(b, _) => {
                 assert_eq!(*b, HOLE, "invalid expand_right() on non-hole");
                 *b = idx
             }
-            _ => panic!("invalid expand_right() on non-lam non-app: {:?}", self.node())
+            _ => panic!(
+                "invalid expand_right() on non-lam non-app: {:?}",
+                self.node()
+            ),
         }
         debug_assert!(self.immut().node_order_safe());
     }
@@ -440,17 +481,15 @@ impl<'a> ExprMut<'a> {
     /// inverse of expand(), but doesn't panic in the case that something is already a hole.
     pub fn unexpand(&mut self) {
         match self.node() {
-            Node::App(x,y) => {
+            Node::App(x, y) => {
                 if *y != HOLE {
                     *y = HOLE;
                 } else {
-                    *x = HOLE;    
+                    *x = HOLE;
                 }
-            },
-            Node::Lam(b, _) => {
-                *b = HOLE
             }
-            _ => panic!("invalid unexpand() on non-lam non-app: {:?}", self.node())
+            Node::Lam(b, _) => *b = HOLE,
+            _ => panic!("invalid unexpand() on non-lam non-app: {:?}", self.node()),
         }
         debug_assert!(self.immut().node_order_safe());
     }
@@ -459,21 +498,27 @@ impl<'a> ExprMut<'a> {
     /// unexpand the lefthand side of an App.
     pub fn unexpand_right(&mut self) {
         match self.node() {
-            Node::App(_,y) => {
+            Node::App(_, y) => {
                 if *y != HOLE {
                     *y = HOLE;
                 }
-            },
-            Node::Lam(b, _) => {
-                *b = HOLE
             }
-            _ => panic!("invalid unexpand_right() on non-lam non-app: {:?}", self.node())
+            Node::Lam(b, _) => *b = HOLE,
+            _ => panic!(
+                "invalid unexpand_right() on non-lam non-app: {:?}",
+                self.node()
+            ),
         }
         debug_assert!(self.immut().node_order_safe());
     }
 
-    /// shift by incr_by 
-    pub fn shift(&mut self, incr_by: i32, init_depth: i32, analyzed_free_vars: &mut AnalyzedExpr<FreeVarAnalysis>) -> Idx {
+    /// shift by incr_by
+    pub fn shift(
+        &mut self,
+        incr_by: i32,
+        init_depth: i32,
+        analyzed_free_vars: &mut AnalyzedExpr<FreeVarAnalysis>,
+    ) -> Idx {
         analyzed_free_vars.analyze_to(self.set, self.idx);
         if analyzed_free_vars[self.idx].is_empty()
             || *analyzed_free_vars[self.idx].iter().max().unwrap() < init_depth
@@ -483,17 +528,25 @@ impl<'a> ExprMut<'a> {
 
         match self.node().clone() {
             Node::Prim(_) => self.idx,
-            Node::Var(i, tag) => if i >= init_depth { self.set.add(Node::Var(i+incr_by, tag)) } else { self.idx },
+            Node::Var(i, tag) => {
+                if i >= init_depth {
+                    self.set.add(Node::Var(i + incr_by, tag))
+                } else {
+                    self.idx
+                }
+            }
             Node::IVar(_) => self.idx,
             Node::App(f, x) => {
                 let f = self.get(f).shift(incr_by, init_depth, analyzed_free_vars);
                 let x = self.get(x).shift(incr_by, init_depth, analyzed_free_vars);
                 self.set.add(Node::App(f, x))
-            },
+            }
             Node::Lam(b, tag) => {
-                let b = self.get(b).shift(incr_by, init_depth+1, analyzed_free_vars);
+                let b = self
+                    .get(b)
+                    .shift(incr_by, init_depth + 1, analyzed_free_vars);
                 self.set.add(Node::Lam(b, tag))
-            },
+            }
         }
     }
 }
@@ -520,16 +573,15 @@ impl<'a> ExprMut<'a> {
 //     }
 // }
 
-
 /// the cost of a program, where `app` and `lam` cost 1, `programs` costs nothing,
 /// `ivar` and `var` and `prim` cost 100.
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct ExprCost {
     pub cost_lam: i32,
     pub cost_app: i32,
     pub cost_var: i32,
     pub cost_ivar: i32,
-    pub cost_prim: HashMap<Symbol,i32>,
+    pub cost_prim: HashMap<Symbol, i32>,
     pub cost_prim_default: i32,
 }
 
@@ -585,12 +637,12 @@ mod tests {
     #[test]
     fn test_expr_basics() {
         let set = &mut ExprSet::empty(Order::ChildFirst, true, false);
-        
+
         let e1 = set.parse_extend("(lam $0)").unwrap();
         let e2 = set.parse_extend("(+ 4 4)").unwrap();
 
         // bottom up style addition of a node
-        let e3 = set.add(Node::App(e1,e2));
+        let e3 = set.add(Node::App(e1, e2));
         assert_eq!(set.get(e3).to_string(), "((lam $0) (+ 4 4))".to_string());
 
         // iterators tend to return Idxs instead of &'a references to avoid
@@ -599,7 +651,7 @@ mod tests {
         for i in set.get(e1).iter_span() {
             let bonus = set.len() as i32;
             match set.get_mut(i).node() {
-                Node::Var(i, _) => {*i += bonus},
+                Node::Var(i, _) => *i += bonus,
                 _ => {}
             }
         }
@@ -620,8 +672,8 @@ mod tests {
         assert_eq!(e.hole().to_string(), "??");
 
         // (app (app + ??) (lam ??))
-        let app1 = e.add(Node::App(HOLE,HOLE));
-        let app2 = e.add(Node::App(HOLE,HOLE));
+        let app1 = e.add(Node::App(HOLE, HOLE));
+        let app2 = e.add(Node::App(HOLE, HOLE));
         let plus = e.add(Node::Prim("+".into()));
         let lam = e.add(Node::Lam(HOLE, -1));
         e.get_mut(app1).expand(app2);
@@ -669,9 +721,13 @@ mod tests {
         assert_eq!(*num_terminals.analyze_get(e.get(idx)), 4);
 
         let idx = e.parse_extend("(lam (lam ($1 #0 $2)))").unwrap();
-        assert_eq!(AnalyzedExpr::new(FreeVarAnalysis).analyze_get(e.get(idx)), &vec![0].into_iter().collect::<FxHashSet<i32>>());
-        assert_eq!(AnalyzedExpr::new(IVarAnalysis).analyze_get(e.get(idx)), &vec![0].into_iter().collect::<FxHashSet<i32>>());
-
-
+        assert_eq!(
+            AnalyzedExpr::new(FreeVarAnalysis).analyze_get(e.get(idx)),
+            &vec![0].into_iter().collect::<FxHashSet<i32>>()
+        );
+        assert_eq!(
+            AnalyzedExpr::new(IVarAnalysis).analyze_get(e.get(idx)),
+            &vec![0].into_iter().collect::<FxHashSet<i32>>()
+        );
     }
 }

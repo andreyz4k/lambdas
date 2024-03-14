@@ -6,7 +6,7 @@ use crate::*;
 pub enum ZNode {
     // * order of variants here is important because the derived Ord will use it
     Func, // zipper went into the function, so Idx is the arg
-    Body, 
+    Body,
     Arg, // zipper went into the arg, so Idx is the function
 }
 
@@ -15,12 +15,11 @@ pub enum ZNode {
 /// "zipper Idx" each unique zipper gets referred to by its zipper Idx
 pub type ZId = usize;
 
-
 /// a zid referencing a specific ZPath and a #i index
-#[derive(Debug,Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct LabelledZId {
     pub zid: ZId,
-    pub ivar: usize // which #i argument this is, which also corresponds to args[i] ofc
+    pub ivar: usize, // which #i argument this is, which also corresponds to args[i] ofc
 }
 
 impl LabelledZId {
@@ -40,14 +39,5 @@ impl<'a> Expr<'a> {
             }
         }
         e
-    } 
+    }
 }
-
-
-
-
-
-
-
-
-

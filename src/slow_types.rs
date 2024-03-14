@@ -1,14 +1,13 @@
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use serde::{Serialize, Deserialize};
 
 use crate::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SlowType {
-    Var(usize), // type variable like t0 t1 etc
+    Var(usize),                  // type variable like t0 t1 etc
     Term(Symbol, Vec<SlowType>), // symbol is the name like "int" or "list" or "->" and Vec<Type> is the args which is empty list for things like int etc
 }
-
 
 impl SlowType {
     pub fn base(name: Symbol) -> SlowType {
@@ -28,14 +27,14 @@ impl SlowType {
 
     pub fn as_arrow(&self) -> Option<(&SlowType, &SlowType)> {
         match self {
-            SlowType::Term(name,args) => {
+            SlowType::Term(name, args) => {
                 if *name != *ARROW_SYM {
-                    return None
+                    return None;
                 }
-                assert_eq!(args.len(),2);
+                assert_eq!(args.len(), 2);
                 Some((&args[0], &args[1]))
-            },
-            _ => None
+            }
+            _ => None,
         }
     }
 
@@ -51,8 +50,8 @@ impl SlowType {
     }
 
     /// iterates over uncurried argument types of this arrow type
-    pub fn iter_args(&self) -> impl Iterator<Item=&SlowType> {
-        self.iter_arrows().map(|(left,_right)| left)
+    pub fn iter_args(&self) -> impl Iterator<Item = &SlowType> {
+        self.iter_arrows().map(|(left, _right)| left)
     }
 
     /// arity of this arrow type (zero if not an arrow type)
@@ -63,22 +62,25 @@ impl SlowType {
     /// return type of this arrow types *after* uncurrying. For a non arrow type
     /// this just returns the type itself.
     pub fn return_type(&self) -> &SlowType {
-        self.iter_arrows().last().map(|(_left,right)| right).unwrap_or(self)
+        self.iter_arrows()
+            .last()
+            .map(|(_left, right)| right)
+            .unwrap_or(self)
     }
 
     /// true if there are no type vars in this type
     pub fn is_concrete(&self) -> bool {
         match self {
             SlowType::Var(_) => false,
-            SlowType::Term(_, args) => args.iter().all(|ty| ty.is_concrete())
+            SlowType::Term(_, args) => args.iter().all(|ty| ty.is_concrete()),
         }
     }
 
     /// true if type var i occurs in this type
     pub fn occurs(&self, i: usize) -> bool {
         match self {
-            SlowType::Var(j)  => i == *j,
-            SlowType::Term(_, args) => args.iter().any(|ty| ty.occurs(i))
+            SlowType::Var(j) => i == *j,
+            SlowType::Term(_, args) => args.iter().any(|ty| ty.occurs(i)),
         }
     }
 
@@ -101,8 +103,11 @@ impl SlowType {
                 } else {
                     self.clone() // t0 is not bound by ctx so we leave it unbound
                 }
-            },
-            SlowType::Term(name, args) => SlowType::Term(name.clone(), args.iter().map(|ty| ty.apply_cached(ctx)).collect())
+            }
+            SlowType::Term(name, args) => SlowType::Term(
+                name.clone(),
+                args.iter().map(|ty| ty.apply_cached(ctx)).collect(),
+            ),
         }
     }
 
@@ -120,16 +125,17 @@ impl SlowType {
                 } else {
                     self.clone() // t0 is not bound by ctx so we leave it unbound
                 }
-            },
-            SlowType::Term(name, args) => SlowType::Term(name.clone(), args.iter().map(|ty| ty.apply(ctx)).collect())
+            }
+            SlowType::Term(name, args) => {
+                SlowType::Term(name.clone(), args.iter().map(|ty| ty.apply(ctx)).collect())
+            }
         }
     }
-
 
     /// shifts all variables in a type such that they are fresh variables in the context, returning a new type
     pub fn instantiate(&self, ctx: &mut Context) -> SlowType {
         if self.is_concrete() {
-            return self.clone()
+            return self.clone();
         }
         fn instantiate_aux(ty: &SlowType, ctx: &mut Context, shift_by: usize) -> SlowType {
             match ty {
@@ -138,8 +144,13 @@ impl SlowType {
                     ctx.fresh_type_vars(new);
                     assert!(ctx.get(new).is_none());
                     SlowType::Var(new)
-                },
-                SlowType::Term(name, args) => SlowType::Term(name.clone(), args.iter().map(|t| instantiate_aux(t, ctx, shift_by)).collect()),
+                }
+                SlowType::Term(name, args) => SlowType::Term(
+                    name.clone(),
+                    args.iter()
+                        .map(|t| instantiate_aux(t, ctx, shift_by))
+                        .collect(),
+                ),
             }
         }
         // shift by the highest var that already exists, so that theres no conflict
@@ -148,22 +159,21 @@ impl SlowType {
 }
 
 pub struct ArrowIter<'a> {
-    curr: &'a SlowType
+    curr: &'a SlowType,
 }
 
 impl<'a> Iterator for ArrowIter<'a> {
     type Item = (&'a SlowType, &'a SlowType);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((left,right)) = self.curr.as_arrow() {
+        if let Some((left, right)) = self.curr.as_arrow() {
             self.curr = right;
-            Some((left,right))
+            Some((left, right))
         } else {
             None
         }
     }
 }
-
 
 impl std::str::FromStr for SlowType {
     type Err = String;
@@ -174,9 +184,13 @@ impl std::str::FromStr for SlowType {
 
 impl std::fmt::Display for SlowType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn helper(ty: &SlowType, f: &mut std::fmt::Formatter<'_>, arrow_parens: bool) -> std::fmt::Result {
+        fn helper(
+            ty: &SlowType,
+            f: &mut std::fmt::Formatter<'_>,
+            arrow_parens: bool,
+        ) -> std::fmt::Result {
             match ty {
-                SlowType::Var(i) => write!(f,"t{}", i),
+                SlowType::Var(i) => write!(f, "t{}", i),
                 SlowType::Term(name, args) => {
                     if args.is_empty() {
                         write!(f, "{}", name)
@@ -201,24 +215,22 @@ impl std::fmt::Display for SlowType {
                         }
                         write!(f, ")")
                     }
-                },
+                }
             }
         }
         helper(self, f, true)
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Context {
     subst_unionfind: Vec<Option<SlowType>>, // todo also try ahashmap tho i just wanted to avoid the allocations
-    subst_append_only: Vec<(usize,SlowType)>,
+    subst_append_only: Vec<(usize, SlowType)>,
     next_var: usize,
     append_only: bool,
 }
 
 impl Context {
-
     /// This is the usual way of creating a new Context. The context will be append-only
     /// meaning you can roll it back to a point by truncating
     pub fn empty() -> Context {
@@ -241,12 +253,12 @@ impl Context {
         }
     }
 
-    pub fn save_state(&self) -> (usize,usize) {
+    pub fn save_state(&self) -> (usize, usize) {
         assert!(self.append_only);
         (self.subst_append_only.len(), self.next_var)
     }
 
-    pub fn load_state(&mut self, state: (usize,usize)) {
+    pub fn load_state(&mut self, state: (usize, usize)) {
         assert!(self.append_only);
         self.subst_append_only.truncate(state.0);
         self.next_var = state.1;
@@ -257,7 +269,7 @@ impl Context {
             self.subst_unionfind.push(None);
         }
         self.next_var += 1;
-        SlowType::Var(self.next_var-1)
+        SlowType::Var(self.next_var - 1)
     }
 
     /// adds new fresh type vars as necessary such that variable Var exists
@@ -277,20 +289,25 @@ impl Context {
     /// Note the apply_immut version of this was wrong bc thats only safe to do on the hole_tp side and apply_immut
     /// is already done to the hole before then anyways
     pub fn might_unify(t1: &SlowType, t2: &SlowType) -> bool {
-        match (t1,t2) {
+        match (t1, t2) {
             (SlowType::Var(_), SlowType::Var(_)) => true,
             (SlowType::Var(_), SlowType::Term(_, _)) => true,
             (SlowType::Term(_, _), SlowType::Var(_)) => true,
             (SlowType::Term(x, xs), SlowType::Term(y, ys)) => {
-                x == y && xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(x,y)| Context::might_unify(x,y))
-            },
+                x == y
+                    && xs.len() == ys.len()
+                    && xs
+                        .iter()
+                        .zip(ys.iter())
+                        .all(|(x, y)| Context::might_unify(x, y))
+            }
         }
     }
 
     /// Normal unification. Does not do the amortizing step of the unionfind (but may mutate
     /// it still). See unify_cached() for amortized unionfind. Note that this is likely not slower
     /// than unify_cached() in most cases.
-    pub fn unify(&mut self, t1: &SlowType,  t2: &SlowType) -> UnifyResult {
+    pub fn unify(&mut self, t1: &SlowType, t2: &SlowType) -> UnifyResult {
         // println!("\tunify({},{}) {}", t1, t2, self);
         let t1: SlowType = t1.apply(self);
         let t2: SlowType = t2.apply(self);
@@ -298,34 +315,40 @@ impl Context {
         if t1.is_concrete() && t2.is_concrete() {
             // if both types are concrete, simple equality works because we dont need to do any fancy variable binding
             if t1 == t2 {
-                return Ok(())
+                return Ok(());
             } else {
-                return Err(UnifyErr::ConcreteSubtree)
+                return Err(UnifyErr::ConcreteSubtree);
             }
         }
         match (t1, t2) {
             (SlowType::Var(i), ty) | (ty, SlowType::Var(i)) => {
-                if ty == SlowType::Var(i) { return Ok(()) } // unify(t0, t0) -> true
-                if ty.occurs(i) { return Err(UnifyErr::Occurs) } // recursive type  e.g. unify(t0, (t0 -> int)) -> false
-                // *** Above is the "occurs" check, which prevents recursive definitions of types. Removing it would allow them.
+                if ty == SlowType::Var(i) {
+                    return Ok(());
+                } // unify(t0, t0) -> true
+                if ty.occurs(i) {
+                    return Err(UnifyErr::Occurs);
+                } // recursive type  e.g. unify(t0, (t0 -> int)) -> false
+                  // *** Above is the "occurs" check, which prevents recursive definitions of types. Removing it would allow them.
 
                 assert!(self.get(i).is_none());
                 self.set(i, ty);
                 Ok(())
-            },
+            }
             (SlowType::Term(x, xs), SlowType::Term(y, ys)) => {
                 // simply recurse
                 if x != y || xs.len() != ys.len() {
-                    return Err(UnifyErr::Production)
+                    return Err(UnifyErr::Production);
                 }
-                xs.iter().zip(ys.iter()).try_for_each(|(x,y)| self.unify(x,y))
+                xs.iter()
+                    .zip(ys.iter())
+                    .try_for_each(|(x, y)| self.unify(x, y))
             }
         }
     }
 
     /// [expert mode] like unify() but uses apply_cached() to do amortization step of
     /// unionfind. Likely not worth using compared to unify().
-    pub fn unify_cached(&mut self, t1: &SlowType,  t2: &SlowType) -> UnifyResult {
+    pub fn unify_cached(&mut self, t1: &SlowType, t2: &SlowType) -> UnifyResult {
         // println!("unify({},{}) {}", t1, t2, self);
         let t1: SlowType = t1.apply_cached(self);
         let t2: SlowType = t2.apply_cached(self);
@@ -333,36 +356,46 @@ impl Context {
         if t1.is_concrete() && t2.is_concrete() {
             // if both types are concrete, simple equality works because we dont need to do any fancy variable binding
             if t1 == t2 {
-                return Ok(())
+                return Ok(());
             } else {
-                return Err(UnifyErr::ConcreteSubtree)
+                return Err(UnifyErr::ConcreteSubtree);
             }
         }
         match (t1, t2) {
             (SlowType::Var(i), ty) | (ty, SlowType::Var(i)) => {
-                if ty == SlowType::Var(i) { return Ok(()) } // unify(t0, t0) -> true
-                if ty.occurs(i) { return Err(UnifyErr::Occurs) } // recursive type  e.g. unify(t0, (t0 -> int)) -> false
-                // *** Above is the "occurs" check, which prevents recursive definitions of types. Removing it would allow them.
+                if ty == SlowType::Var(i) {
+                    return Ok(());
+                } // unify(t0, t0) -> true
+                if ty.occurs(i) {
+                    return Err(UnifyErr::Occurs);
+                } // recursive type  e.g. unify(t0, (t0 -> int)) -> false
+                  // *** Above is the "occurs" check, which prevents recursive definitions of types. Removing it would allow them.
 
                 assert!(self.subst_unionfind.get(i).is_none());
                 self.set(i, ty);
                 Ok(())
-            },
+            }
             (SlowType::Term(x, xs), SlowType::Term(y, ys)) => {
                 // simply recurse
                 if x != y || xs.len() != ys.len() {
-                    return Err(UnifyErr::Production)
+                    return Err(UnifyErr::Production);
                 }
-                xs.iter().zip(ys.iter()).try_for_each(|(x,y)| self.unify(x,y))
+                xs.iter()
+                    .zip(ys.iter())
+                    .try_for_each(|(x, y)| self.unify(x, y))
             }
         }
     }
 
     /// get what a variable is bound to (if anything).
     #[inline(always)]
-    fn get(&self, var: usize) -> Option<&SlowType> { // todo written in a silly way, rewrite
+    fn get(&self, var: usize) -> Option<&SlowType> {
+        // todo written in a silly way, rewrite
         if self.append_only {
-            self.subst_append_only.iter().rfind(|(i,_)| *i == var).map(|(_,tp)| tp)
+            self.subst_append_only
+                .iter()
+                .rfind(|(i, _)| *i == var)
+                .map(|(_, tp)| tp)
         } else {
             self.subst_unionfind[var].as_ref()
         }
@@ -371,40 +404,47 @@ impl Context {
     #[inline(always)]
     fn set(&mut self, var: usize, ty: SlowType) {
         if self.append_only {
-            self.subst_append_only.push((var,ty));
+            self.subst_append_only.push((var, ty));
         } else {
             self.subst_unionfind[var] = Some(ty);
         }
     }
-
 }
 
 impl std::fmt::Display for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f,"{{")?;
+        write!(f, "{{")?;
         let mut first: bool = true;
         for (i, item) in self.subst_unionfind.iter().enumerate() {
             if let Some(ty) = item {
-                if !first { write!(f, ", ")? } else { first = false }
+                if !first {
+                    write!(f, ", ")?
+                } else {
+                    first = false
+                }
                 write!(f, "{}:{}", i, ty)?
             }
         }
-        write!(f,"}}")
+        write!(f, "}}")
     }
 }
 
-
 impl<'a> Expr<'a> {
-    pub fn infer<D: Domain>(&self, ctx: &mut Context, env: &mut VecDeque<SlowType>, dsl: &DSL<D>) -> Result<SlowType,UnifyErr> {
+    pub fn infer<D: Domain>(
+        &self,
+        ctx: &mut Context,
+        env: &mut VecDeque<SlowType>,
+        dsl: &DSL<D>,
+    ) -> Result<SlowType, UnifyErr> {
         // println!("infer({})", self.to_string_uncurried(child));
         match self.node() {
-            Node::App(f,x) => {
+            Node::App(f, x) => {
                 let return_tp = ctx.fresh_type_var();
                 let x_tp = self.get(*x).infer::<D>(ctx, env, dsl)?;
                 let f_tp = self.get(*f).infer::<D>(ctx, env, dsl)?;
                 ctx.unify(&f_tp, &SlowType::arrow(x_tp, return_tp.clone()))?;
                 Ok(return_tp.apply(ctx))
-            },
+            }
             Node::Lam(b, _) => {
                 let var_tp = ctx.fresh_type_var();
                 // todo maybe optimize by making this a vecdeque for faster insert/remove at the zero index
@@ -412,20 +452,18 @@ impl<'a> Expr<'a> {
                 let body_tp = self.get(*b).infer::<D>(ctx, env, dsl)?;
                 env.pop_front();
                 Ok(SlowType::arrow(var_tp, body_tp).apply(ctx))
-            },
+            }
             Node::Var(i, _) => {
                 if (*i as usize) >= env.len() {
                     panic!("unbound variable encountered during infer(): ${}", i)
                 }
                 Ok(env[*i as usize].apply(ctx))
-            },
+            }
             Node::IVar(_i) => {
                 // interesting, I guess we can have this and it'd probably be easy to do
                 unimplemented!();
             }
-            Node::Prim(p) => {
-                Ok(dsl.type_of_prim(p).instantiate(ctx))
-            },
+            Node::Prim(p) => Ok(dsl.type_of_prim(p).instantiate(ctx)),
         }
     }
     // pub fn infer_ref<D: Domain>(&self, ctx: &mut TypeSet, env: &mut VecDeque<TypeRef>) -> Result<TypeRef,UnifyErr> {
@@ -462,68 +500,86 @@ impl<'a> Expr<'a> {
     //         },
     //     }
     // }
-    
 }
-
 
 #[test]
 fn test_parse_types() {
-    assert_eq!("int".parse::<SlowType>().unwrap(),
-        SlowType::Term("int".into(), vec![]));
-
-    assert_eq!("((int))".parse::<SlowType>().unwrap(),
-        SlowType::Term("int".into(), vec![]));
-
-    assert_eq!("list int".parse::<SlowType>().unwrap(),
-    SlowType::Term("list".into(), vec![
+    assert_eq!(
+        "int".parse::<SlowType>().unwrap(),
         SlowType::Term("int".into(), vec![])
-    ]));
+    );
 
-    assert_eq!("(foo -> bar)".parse::<SlowType>().unwrap(),
-    SlowType::Term(ARROW_SYM.clone(), vec![
-        SlowType::Term("foo".into(), vec![]),
-        SlowType::Term("bar".into(), vec![]),
-    ]));
+    assert_eq!(
+        "((int))".parse::<SlowType>().unwrap(),
+        SlowType::Term("int".into(), vec![])
+    );
 
-    assert_eq!("foo -> bar".parse::<SlowType>().unwrap(),
-    SlowType::Term(ARROW_SYM.clone(), vec![
-        SlowType::Term("foo".into(), vec![]),
-        SlowType::Term("bar".into(), vec![]),
-    ]));
+    assert_eq!(
+        "list int".parse::<SlowType>().unwrap(),
+        SlowType::Term("list".into(), vec![SlowType::Term("int".into(), vec![])])
+    );
 
-    assert_eq!("(foo -> bar -> baz)".parse::<SlowType>().unwrap(),
-    SlowType::Term(ARROW_SYM.clone(), vec![
-        SlowType::Term("foo".into(), vec![]),
-        SlowType::Term(ARROW_SYM.clone(), vec![
-            SlowType::Term("bar".into(), vec![]),
-            SlowType::Term("baz".into(), vec![]),
-        ]),
-    ]));
+    assert_eq!(
+        "(foo -> bar)".parse::<SlowType>().unwrap(),
+        SlowType::Term(
+            ARROW_SYM.clone(),
+            vec![
+                SlowType::Term("foo".into(), vec![]),
+                SlowType::Term("bar".into(), vec![]),
+            ]
+        )
+    );
 
-    assert_eq!("t2".parse::<SlowType>().unwrap(),
-        SlowType::Var(2));
+    assert_eq!(
+        "foo -> bar".parse::<SlowType>().unwrap(),
+        SlowType::Term(
+            ARROW_SYM.clone(),
+            vec![
+                SlowType::Term("foo".into(), vec![]),
+                SlowType::Term("bar".into(), vec![]),
+            ]
+        )
+    );
 
+    assert_eq!(
+        "(foo -> bar -> baz)".parse::<SlowType>().unwrap(),
+        SlowType::Term(
+            ARROW_SYM.clone(),
+            vec![
+                SlowType::Term("foo".into(), vec![]),
+                SlowType::Term(
+                    ARROW_SYM.clone(),
+                    vec![
+                        SlowType::Term("bar".into(), vec![]),
+                        SlowType::Term("baz".into(), vec![]),
+                    ]
+                ),
+            ]
+        )
+    );
+
+    assert_eq!("t2".parse::<SlowType>().unwrap(), SlowType::Var(2));
 
     // the map() type
-    assert_eq!("(t0 -> t1) -> (list t0) -> (list t1)".parse::<SlowType>().unwrap(),
-    SlowType::Term(ARROW_SYM.clone(), vec![
-        SlowType::Term(ARROW_SYM.clone(), vec![
-            SlowType::Var(0),
-            SlowType::Var(1),
-        ]),
-        SlowType::Term(ARROW_SYM.clone(), vec![
-            SlowType::Term("list".into(), vec![
-                SlowType::Var(0)
-            ]),
-            SlowType::Term("list".into(), vec![
-                SlowType::Var(1)
-            ]),
-        ]),
-    ]));
-
+    assert_eq!(
+        "(t0 -> t1) -> (list t0) -> (list t1)"
+            .parse::<SlowType>()
+            .unwrap(),
+        SlowType::Term(
+            ARROW_SYM.clone(),
+            vec![
+                SlowType::Term(ARROW_SYM.clone(), vec![SlowType::Var(0), SlowType::Var(1),]),
+                SlowType::Term(
+                    ARROW_SYM.clone(),
+                    vec![
+                        SlowType::Term("list".into(), vec![SlowType::Var(0)]),
+                        SlowType::Term("list".into(), vec![SlowType::Var(1)]),
+                    ]
+                ),
+            ]
+        )
+    );
 
     // test load_types
     // load_types(Path::new("data/types_origami.json"));
-    
 }
-

@@ -1,29 +1,19 @@
 #[macro_use]
 mod macros;
 
-mod expr;
+mod analysis;
+pub mod domains;
 mod dsl;
 mod eval;
-mod parse_type;
+mod expr;
 mod parse_expr;
+mod parse_type;
+mod slow_types;
 mod types;
 mod util;
-mod analysis;
 mod zipper;
-pub mod domains;
-mod slow_types;
 
 pub use {
-    string_cache::DefaultAtom as Symbol,
-    expr::*,
-    dsl::*,
-    eval::*,
-    types::*,
-    slow_types::*,
-    util::*,
-    parse_expr::*,
-    parse_type::*,
-    analysis::*,
-    zipper::*,
-    eval::Val::*,
+    analysis::*, dsl::*, eval::Val::*, eval::*, expr::*, parse_expr::*, parse_type::*,
+    slow_types::*, string_cache::DefaultAtom as Symbol, types::*, util::*, zipper::*,
 };
