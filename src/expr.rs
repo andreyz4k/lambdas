@@ -25,6 +25,21 @@ pub enum Node {
     IVar(i32),     // abstraction ("invention") variable
     App(Idx, Idx), // f, x
     Lam(Idx, Tag), // body, tag
+    NVar(Symbol),  // named variable
+    Const(Symbol), // constant
+    Let {
+        // let expression
+        var: Symbol,
+        def: Idx,
+        body: Idx,
+    },
+    RevLet {
+        // reverse let expression
+        inp_var: Symbol,
+        def_vars: Vec<Symbol>,
+        def: Idx,
+        body: Idx,
+    },
 }
 
 /// An untyped lambda calculus expression or set of expressions
@@ -94,6 +109,10 @@ impl ExprOwned {
                     .unwrap_or(&cost_fn.cost_prim_default),
                 Node::App(_, _) => cost_fn.cost_app,
                 Node::Lam(_, _) => cost_fn.cost_lam,
+                Node::NVar(_) => cost_fn.cost_nvar,
+                Node::Const(_) => cost_fn.cost_const,
+                Node::Let { .. } => cost_fn.cost_let,
+                Node::RevLet { .. } => cost_fn.cost_revlet,
             })
             .sum::<i32>()
     }
@@ -165,12 +184,20 @@ impl ExprSet {
         // push on a new span if we're tracking spans
         if let Some(spans) = &mut self.spans {
             let span = match node {
-                Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) => idx..idx + 1,
+                Node::Var(_, _)
+                | Node::Prim(_)
+                | Node::IVar(_)
+                | Node::NVar(_)
+                | Node::Const(_) => idx..idx + 1,
                 Node::App(f, x) => {
                     min(min(spans[f].start, spans[x].start), idx)
                         ..max(max(spans[f].end, spans[x].end), idx + 1)
                 }
                 Node::Lam(b, _) => min(spans[b].start, idx)..max(spans[b].end, idx + 1),
+                Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
+                    min(min(spans[def].start, spans[body].start), idx)
+                        ..max(max(spans[def].end, spans[body].end), idx + 1)
+                }
             };
             spans.push(span);
         }
@@ -238,9 +265,14 @@ impl<'a> Expr<'a> {
     }
     pub fn children(&self) -> impl Iterator<Item = Idx> {
         match self.node() {
-            Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) => vec![].into_iter(),
+            Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) | Node::NVar(_) | Node::Const(_) => {
+                vec![].into_iter()
+            }
             Node::App(f, x) => vec![*f, *x].into_iter(),
             Node::Lam(b, _) => vec![*b].into_iter(),
+            Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
+                vec![*def, *body].into_iter()
+            }
         }
     }
     /// assuming this is an App, get the subexpression to the left
@@ -293,6 +325,10 @@ impl<'a> Expr<'a> {
                     .unwrap_or(&cost_fn.cost_prim_default),
                 Node::App(_, _) => cost_fn.cost_app,
                 Node::Lam(_, _) => cost_fn.cost_lam,
+                Node::NVar(_) => cost_fn.cost_nvar,
+                Node::Const(_) => cost_fn.cost_const,
+                Node::Let { .. } => cost_fn.cost_let,
+                Node::RevLet { .. } => cost_fn.cost_revlet,
             })
             .sum::<i32>();
         debug_assert_eq!(res, self.cost_rec(cost_fn));
@@ -314,6 +350,10 @@ impl<'a> Expr<'a> {
                 cost_fn.cost_app + self.get(*f).cost_rec(cost_fn) + self.get(*x).cost_rec(cost_fn)
             }
             Node::Lam(b, _) => cost_fn.cost_lam + self.get(*b).cost_rec(cost_fn),
+            Node::NVar(_) => cost_fn.cost_nvar,
+            Node::Const(_) => cost_fn.cost_const,
+            Node::Let { .. } => cost_fn.cost_let,
+            Node::RevLet { .. } => cost_fn.cost_revlet,
         }
     }
 
@@ -325,11 +365,31 @@ impl<'a> Expr<'a> {
         other_set.nodes.extend(self.iter_span().map(|i| {
             let node = self.get_node(i);
             match node {
-                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => node.clone(),
+                Node::Prim(_)
+                | Node::Var(_, _)
+                | Node::IVar(_)
+                | Node::NVar(_)
+                | Node::Const(_) => node.clone(),
                 Node::App(f, x) => {
                     Node::App((*f as i32 + shift) as usize, (*x as i32 + shift) as usize)
                 }
                 Node::Lam(b, tag) => Node::Lam((*b as i32 + shift) as usize, *tag),
+                Node::Let { var, def, body } => Node::Let {
+                    var: var.clone(),
+                    def: (*def as i32 + shift) as usize,
+                    body: (*body as i32 + shift) as usize,
+                },
+                Node::RevLet {
+                    inp_var,
+                    def_vars,
+                    def,
+                    body,
+                } => Node::RevLet {
+                    inp_var: inp_var.clone(),
+                    def_vars: def_vars.clone(),
+                    def: (*def as i32 + shift) as usize,
+                    body: (*body as i32 + shift) as usize,
+                },
             }
         }));
 
@@ -368,7 +428,11 @@ impl<'a> Expr<'a> {
         assert_eq!(self.set.order, other_set.order);
         fn helper(e: Expr, other_set: &mut ExprSet) -> Idx {
             match e.node() {
-                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => other_set.add(e.node().clone()),
+                Node::Prim(_)
+                | Node::Var(_, _)
+                | Node::IVar(_)
+                | Node::NVar(_)
+                | Node::Const(_) => other_set.add(e.node().clone()),
                 Node::App(f, x) => {
                     let f = helper(e.get(*f), other_set);
                     let x = helper(e.get(*x), other_set);
@@ -377,6 +441,30 @@ impl<'a> Expr<'a> {
                 Node::Lam(b, tag) => {
                     let b = helper(e.get(*b), other_set);
                     other_set.add(Node::Lam(b, *tag))
+                }
+                Node::Let { var, def, body } => {
+                    let def = helper(e.get(*def), other_set);
+                    let body = helper(e.get(*body), other_set);
+                    other_set.add(Node::Let {
+                        var: var.clone(),
+                        def,
+                        body,
+                    })
+                }
+                Node::RevLet {
+                    inp_var,
+                    def_vars,
+                    def,
+                    body,
+                } => {
+                    let def = helper(e.get(*def), other_set);
+                    let body = helper(e.get(*body), other_set);
+                    other_set.add(Node::RevLet {
+                        inp_var: inp_var.clone(),
+                        def_vars: def_vars.clone(),
+                        def,
+                        body,
+                    })
                 }
             }
         }
@@ -399,6 +487,17 @@ impl<'a> Expr<'a> {
                 Order::ChildFirst => *b == HOLE || *b < self.idx,
                 Order::ParentFirst => *b == HOLE || *b > self.idx,
                 Order::Any => *b != self.idx,
+            },
+            Node::NVar(_) => true,
+            Node::Const(_) => true,
+            Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => match self.set.order {
+                Order::ChildFirst => {
+                    (*def == HOLE || *def < self.idx) && (*body == HOLE || *body < self.idx)
+                }
+                Order::ParentFirst => {
+                    (*def == HOLE || *def > self.idx) && (*body == HOLE || *body > self.idx)
+                }
+                Order::Any => *def != self.idx && *body != self.idx,
             },
         }
     }
@@ -547,6 +646,32 @@ impl<'a> ExprMut<'a> {
                     .shift(incr_by, init_depth + 1, analyzed_free_vars);
                 self.set.add(Node::Lam(b, tag))
             }
+            Node::NVar(_) => self.idx,
+            Node::Const(_) => self.idx,
+            Node::Let { var, def, body } => {
+                let def = self.get(def).shift(incr_by, init_depth, analyzed_free_vars);
+                let body = self
+                    .get(body)
+                    .shift(incr_by, init_depth, analyzed_free_vars);
+                self.set.add(Node::Let { var, def, body })
+            }
+            Node::RevLet {
+                inp_var,
+                def_vars,
+                def,
+                body,
+            } => {
+                let def = self.get(def).shift(incr_by, init_depth, analyzed_free_vars);
+                let body = self
+                    .get(body)
+                    .shift(incr_by, init_depth, analyzed_free_vars);
+                self.set.add(Node::RevLet {
+                    inp_var,
+                    def_vars,
+                    def,
+                    body,
+                })
+            }
         }
     }
 }
@@ -583,6 +708,10 @@ pub struct ExprCost {
     pub cost_ivar: i32,
     pub cost_prim: HashMap<Symbol, i32>,
     pub cost_prim_default: i32,
+    pub cost_nvar: i32,
+    pub cost_const: i32,
+    pub cost_let: i32,
+    pub cost_revlet: i32,
 }
 
 impl ExprCost {
@@ -594,6 +723,10 @@ impl ExprCost {
             cost_ivar: 100,
             cost_prim: HashMap::new(),
             cost_prim_default: 100,
+            cost_nvar: 1,
+            cost_const: 100,
+            cost_let: 1,
+            cost_revlet: 1,
         }
     }
     pub fn num_terminals() -> ExprCost {
@@ -604,6 +737,10 @@ impl ExprCost {
             cost_ivar: 1,
             cost_prim: HashMap::new(),
             cost_prim_default: 1,
+            cost_nvar: 0,
+            cost_const: 1,
+            cost_let: 0,
+            cost_revlet: 0,
         }
     }
     pub fn num_nodes() -> ExprCost {
@@ -614,6 +751,10 @@ impl ExprCost {
             cost_ivar: 1,
             cost_prim: HashMap::new(),
             cost_prim_default: 1,
+            cost_nvar: 1,
+            cost_const: 1,
+            cost_let: 1,
+            cost_revlet: 1,
         }
     }
 }

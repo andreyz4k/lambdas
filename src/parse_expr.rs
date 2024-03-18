@@ -31,6 +31,10 @@ impl Display for Node {
                 Ok(())
             }
             Self::IVar(i) => write!(f, "#{}", i),
+            Node::NVar(name) => write!(f, "${}", name),
+            Node::Const(val) => write!(f, "Const({})", val),
+            Node::Let { .. } => write!(f, "let"),
+            Node::RevLet { .. } => write!(f, "revlet"),
         }
     }
 }
@@ -43,7 +47,11 @@ impl<'a> Display for Expr<'a> {
             }
 
             match e.node() {
-                Node::Var(_, _) | Node::IVar(_) | Node::Prim(_) => write!(f, "{}", e.node()),
+                Node::Var(_, _)
+                | Node::IVar(_)
+                | Node::Prim(_)
+                | Node::NVar(_)
+                | Node::Const(_) => write!(f, "{}", e.node()),
                 Node::App(fun, x) => {
                     // if you are the left side of an application, and you are an application, you dont need parens
                     if !left_of_app {
@@ -67,6 +75,30 @@ impl<'a> Display for Expr<'a> {
                     fmt_local(e.get(*b), false, f)?;
                     write!(f, ")")
                 }
+                Node::Let { var, def, body } => {
+                    write!(f, "let ${} = ", var)?;
+                    fmt_local(e.get(*def), false, f)?;
+                    write!(f, " in ")?;
+                    fmt_local(e.get(*body), false, f)
+                }
+                Node::RevLet {
+                    inp_var,
+                    def_vars,
+                    def,
+                    body,
+                } => {
+                    write!(f, "let ")?;
+                    for (i, var) in def_vars.iter().enumerate() {
+                        write!(f, "${}", var)?;
+                        if i != def_vars.len() - 1 {
+                            write!(f, ", ")?;
+                        }
+                    }
+                    write!(f, " = rev(${} = ", inp_var)?;
+                    fmt_local(e.get(*def), false, f)?;
+                    write!(f, ") in ")?;
+                    fmt_local(e.get(*body), false, f)
+                }
             }
         }
         fmt_local(*self, false, f)
@@ -79,199 +111,304 @@ impl Display for ExprOwned {
     }
 }
 
+use nom::{
+    branch::alt,
+    bytes::complete::{tag, take_while, take_while1},
+    character::complete::{alphanumeric1, digit1, multispace0},
+    combinator::{eof, map_res, opt, recognize},
+    error::Error,
+    multi::{many0, many1, separated_list1},
+    sequence::{preceded, terminated, tuple},
+    IResult,
+};
+
+fn is_token_char(c: char) -> bool {
+    c.is_alphanumeric() || "_\\-+*/'.<>|@?[],".contains(c)
+}
+
+fn parse_prim(s: &str) -> IResult<&str, Vec<Node>> {
+    map_res(
+        take_while1(is_token_char),
+        |p: &str| -> Result<Vec<Node>, Error<&str>> { Ok(vec![Node::Prim(p.into())]) },
+    )(s)
+}
+
+fn parse_var(s: &str) -> IResult<&str, Vec<Node>> {
+    preceded(
+        tag("$"),
+        map_res(
+            tuple((
+                map_res(digit1, str::parse),
+                opt(preceded(tag("_"), map_res(digit1, str::parse))),
+            )),
+            |(i, var_tag)| -> Result<Vec<Node>, Error<&str>> {
+                Ok(vec![Node::Var(i, var_tag.unwrap_or(-1))])
+            },
+        ),
+    )(s)
+}
+
+fn parse_ivar(s: &str) -> IResult<&str, Vec<Node>> {
+    map_res(
+        preceded(tag("#"), map_res(digit1, str::parse)),
+        |i| -> Result<Vec<Node>, Error<&str>> { Ok(vec![Node::IVar(i)]) },
+    )(s)
+}
+
+fn parse_nvar(s: &str) -> IResult<&str, Vec<Node>> {
+    map_res(
+        preceded(tag("$"), take_while1(is_token_char)),
+        |name: &str| -> Result<Vec<Node>, Error<&str>> { Ok(vec![Node::NVar(name.into())]) },
+    )(s)
+}
+
+fn parse_lam(s: &str) -> IResult<&str, Vec<Node>> {
+    map_res(
+        preceded(
+            tag("("),
+            terminated(
+                tuple((
+                    alt((
+                        preceded(
+                            alt((tag("lambda_"), tag("lam_"))),
+                            map_res(digit1, str::parse),
+                        ),
+                        map_res(
+                            alt((tag("lambda"), tag("lam"))),
+                            |_| -> Result<i32, Error<&str>> { Ok(-1) },
+                        ),
+                    )),
+                    parse_program,
+                )),
+                tag(")"),
+            ),
+        ),
+        |(tag, mut body)| -> Result<Vec<Node>, Error<&str>> {
+            let node = Node::Lam(1, tag);
+            body.push(node);
+            Ok(body)
+        },
+    )(s)
+}
+
+fn parse_app(s: &str) -> IResult<&str, Vec<Node>> {
+    map_res(
+        preceded(
+            tag("("),
+            terminated(tuple((parse_program, many1(parse_program))), tag(")")),
+        ),
+        |(mut f, mut xs)| -> Result<Vec<Node>, Error<&str>> {
+            let x_lengths = xs.iter().map(|x| x.len()).collect::<Vec<_>>();
+            let mut lengths_sum: usize = x_lengths.iter().sum();
+            let mut app_nodes = vec![];
+            for (i, x) in xs.iter_mut().enumerate() {
+                let node = if i == 0 {
+                    Node::App(lengths_sum + 1, lengths_sum - x.len() + 1)
+                } else {
+                    Node::App(1, lengths_sum - x.len() + i + 1)
+                };
+                lengths_sum -= x.len();
+                app_nodes.push(node);
+                f.append(x);
+            }
+            f.append(&mut app_nodes);
+            Ok(f)
+        },
+    )(s)
+}
+
+fn parse_type(s: &str) -> IResult<&str, &str> {
+    recognize(tuple((
+        alphanumeric1,
+        opt(tuple((
+            tag("("),
+            parse_type,
+            many0(tuple((tag(","), multispace0, parse_type))),
+            tag(")"),
+        ))),
+    )))(s)
+}
+
+fn is_obj_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '-'
+}
+
+fn parse_object(s: &str) -> IResult<&str, &str> {
+    recognize(tuple((
+        take_while(is_obj_char),
+        opt(tuple((
+            tag("{"),
+            parse_object,
+            many0(tuple((tag(","), multispace0, parse_object))),
+            tag("}"),
+        ))),
+        opt(alt((
+            tuple((
+                tag("("),
+                parse_object,
+                many0(tuple((tag(","), multispace0, parse_object))),
+                tag(")"),
+            )),
+            tuple((
+                tag("["),
+                parse_object,
+                many0(tuple((tag(","), multispace0, parse_object))),
+                tag("]"),
+            )),
+        ))),
+    )))(s)
+}
+
+fn parse_const(s: &str) -> IResult<&str, Vec<Node>> {
+    map_res(
+        preceded(
+            tag("Const("),
+            terminated(
+                tuple((parse_type, tag(","), multispace0, parse_object)),
+                tag(")"),
+            ),
+        ),
+        |(_, _, _, obj)| -> Result<Vec<Node>, Error<&str>> { Ok(vec![Node::Const(obj.into())]) },
+    )(s)
+}
+
+fn parse_let(s: &str) -> IResult<&str, Vec<Node>> {
+    map_res(
+        preceded(
+            tag("let $"),
+            tuple((
+                alphanumeric1,
+                tag("::"),
+                parse_type,
+                tag(" = "),
+                parse_program,
+                tag(" in "),
+                parse_program,
+            )),
+        ),
+        |(var, _, _, _, mut def, _, mut body)| -> Result<Vec<Node>, Error<&str>> {
+            let node = Node::Let {
+                var: var.into(),
+                def: body.len() + 1,
+                body: 1,
+            };
+            def.append(&mut body);
+            def.push(node);
+            Ok(def)
+        },
+    )(s)
+}
+
+fn parse_let_rev(s: &str) -> IResult<&str, Vec<Node>> {
+    map_res(
+        preceded(
+            tag("let "),
+            tuple((
+                separated_list1(tag(", "), preceded(tag("$"), alphanumeric1)),
+                tag(" = rev("),
+                preceded(tag("$"), alphanumeric1),
+                tag(" = "),
+                parse_program,
+                tag(") in"),
+                parse_program,
+            )),
+        ),
+        |(def_vars, _, var, _, mut def, _, mut body)| -> Result<Vec<Node>, Error<&str>> {
+            let node = Node::RevLet {
+                inp_var: var.into(),
+                def_vars: def_vars.into_iter().map(|s| s.into()).collect(),
+                def: body.len() + 1,
+                body: 1,
+            };
+            def.append(&mut body);
+            def.push(node);
+            Ok(def)
+        },
+    )(s)
+}
+
+fn parse_program(s: &str) -> IResult<&str, Vec<Node>> {
+    preceded(
+        multispace0,
+        alt((
+            parse_lam,
+            parse_app,
+            parse_var,
+            parse_ivar,
+            parse_nvar,
+            parse_const,
+            parse_let,
+            parse_let_rev,
+            parse_prim,
+        )),
+    )(s)
+}
+
+fn parse_full_program(s: &str) -> IResult<&str, Vec<Node>> {
+    terminated(parse_program, eof)(s)
+}
+
 impl ExprSet {
     /// parses `s_init` as an Expr, inserting it into `self`. Uses .add() so spans
     /// and structural hashing are done automatically. Is order-aware.
     pub fn parse_extend(&mut self, s_init: &str) -> Result<Idx, String> {
         let init_len = self.nodes.len();
 
-        let mut s = s_init.trim();
+        let s = s_init.trim();
+        // println!("parsing: {}", s_init);
+
+        let match_res: IResult<&str, Vec<Node>> = parse_full_program(s);
+
+        if let Err(nom::Err::Error(Error {
+            input: _,
+            code: nom::error::ErrorKind::Eof,
+        })) = match_res
+        {
+            let wrapped_s = format!("({})", s);
+            let wrapped_res = self.parse_extend(wrapped_s.as_str());
+            if let Ok(e) = wrapped_res {
+                return Ok(e);
+            }
+        };
+
+        let nodes = match_res.map_err(|e| e.to_string())?.1;
 
         let mut items: Vec<Idx> = vec![];
-        let mut items_of_depth: Vec<usize> = vec![]; // offsets[i] gives the number of items at depth i
-        items_of_depth.push(0); // the zero paren depth
-
-        while !s.trim().is_empty() {
-            s = s.trim();
-            let next = s.chars().last().unwrap();
-            if next == '(' {
-                s = &s[..s.len() - 1];
-                let num_items = items_of_depth.pop().ok_or_else(|| {
-                    format!("ExprSet parse error: mismatched parens in: {}", s_init)
-                })?;
-                if num_items == 0 {
-                    continue;
-                }
-
-                // now num_items >= 1. The following loop will only happen if num_items >= 2.
-                // apply the last item to the second to last, etc
-                for _ in 0..num_items - 1 {
-                    // println!("built an app inside");
-                    let f: Idx = items.pop().unwrap();
-                    let x: Idx = items.pop().unwrap();
-                    items.push(self.add(Node::App(f, x)))
-                }
-                // then we simply leave that final result pushed on
-                if let Some(num_items) = items_of_depth.last_mut() {
-                    *num_items += 1;
-                } else {
-                    return Err(format!(
-                        "ExprSet parse error: mismatched parens in: {}",
-                        s_init
-                    ));
-                }
-                continue;
-            }
-            if next == ')' {
-                s = &s[..s.len() - 1];
-                items_of_depth.push(0);
-                continue;
-            }
-            // parse a space-separated word
-            // println!("parsing with s: `{}`", s);
-            let start = {
-                let mut i = s.len() - 1;
-                loop {
-                    if i == 0 {
-                        // println!("break at i==0");
-                        break;
-                    }
-                    let c = s.chars().nth(i - 1).unwrap();
-                    if c.is_whitespace() || c == '(' || c == ')' {
-                        // println!("break at c: {}", c);
-                        break;
-                    }
-                    i -= 1;
-                }
-                // println!("i: {}", i);
-                i
+        for node in nodes {
+            // println!("node: {:?}", node);
+            let norm_node = match node {
+                Node::Prim(_)
+                | Node::Var(_, _)
+                | Node::IVar(_)
+                | Node::NVar(_)
+                | Node::Const(_) => node,
+                Node::App(f, x) => Node::App(items[items.len() - f], items[items.len() - x]),
+                Node::Lam(b, tag) => Node::Lam(items[items.len() - b], tag),
+                Node::Let { var, def, body } => Node::Let {
+                    var,
+                    def: items[items.len() - def],
+                    body: items[items.len() - body],
+                },
+                Node::RevLet {
+                    inp_var,
+                    def_vars,
+                    def,
+                    body,
+                } => Node::RevLet {
+                    inp_var,
+                    def_vars,
+                    def: items[items.len() - def],
+                    body: items[items.len() - body],
+                },
             };
-            let item_str = &s[start..];
-            // println!("item_str: {}", item_str);
-            s = &s[..start];
-
-            if item_str == "lam"
-                || item_str == "lambda"
-                || item_str.starts_with("lam_")
-                || item_str.starts_with("lambda_")
-            {
-                // split on _ and parse the number
-                let mut tag = -1;
-                if item_str.contains('_') {
-                    let mut split = item_str.split('_');
-                    split.next().unwrap(); // strip "lam"
-                    tag = split
-                        .next()
-                        .unwrap()
-                        .parse::<i32>()
-                        .map_err(|e| e.to_string())?;
-                    if tag < 0 {
-                        return Err(format!(
-                            "ExprSet parse error: lambda tag must be non-negative: {}",
-                            s_init
-                        ));
-                    }
-                }
-                // println!("remainder: {}",s);
-                let mut eof = false;
-                if let Some(c) = s.chars().last() {
-                    if c != '(' {
-                        return Err(format!("ExprSet parse error: `lam` must always have an immediately preceding parenthesis like so `(lam` unless its at the start of the parsed string: {}",s_init));
-                    }
-                    s = &s[..s.len() - 1]; // strip "("
-                } else {
-                    eof = true;
-                };
-
-                let num_items = items_of_depth.pop().ok_or_else(|| {
-                    format!("ExprSet parse error: mismatched parens in: {}", s_init)
-                })?;
-                if num_items != 1 {
-                    return Err(format!("ExprSet parse error: `lam` must always be applied to exactly one argument, like `(lam (foo bar))`: {}",s_init));
-                }
-                let b: Idx = items.pop().unwrap();
-                items.push(self.add(Node::Lam(b, tag)));
-                // println!("added lam");
-                if eof {
-                    if items.len() != 1 {
-                        return Err(format!(
-                            "ExprSet parse error: mismatched parens in: {}",
-                            s_init
-                        ));
-                    }
-                    return Ok(items.pop().unwrap());
-                }
-                if let Some(num_items) = items_of_depth.last_mut() {
-                    *num_items += 1;
-                } else {
-                    return Err(format!(
-                        "ExprSet parse error: mismatched parens in: {}",
-                        s_init
-                    ));
-                }
-                continue;
-            }
-
-            let node = {
-                if let Some(mut rest) = item_str.strip_prefix('$') {
-                    // check if item_str has a _ in it
-                    let mut tag = -1;
-                    if rest.contains('_') {
-                        let mut split = rest.split('_');
-                        rest = split.next().unwrap();
-                        tag = split
-                            .next()
-                            .unwrap()
-                            .parse::<i32>()
-                            .map_err(|e| e.to_string())?;
-                        if tag < 0 {
-                            return Err(format!(
-                                "ExprSet parse error: variable tag must be non-negative: {}",
-                                s_init
-                            ));
-                        }
-                    }
-                    Node::Var(rest.parse::<i32>().map_err(|e| e.to_string())?, tag)
-                } else if let Some(rest) = item_str.strip_prefix('#') {
-                    Node::IVar(rest.parse::<i32>().map_err(|e| e.to_string())?)
-                } else {
-                    Node::Prim(item_str.into())
-                }
-            };
-            items.push(self.add(node));
-            *items_of_depth.last_mut().unwrap() += 1;
+            // println!("norm_node: {:?}", norm_node);
+            items.push(self.add(norm_node));
+            // println!("last_node: {}", items[items.len() - 1]);
         }
-
-        if items.is_empty() {
-            return Err("ExprSet parse error: input is empty string".to_string());
-        }
-
-        if items_of_depth.len() != 1 {
-            return Err(format!(
-                "ExprSet parse error: mismatched parens in: {}",
-                s_init
-            ));
-        }
-
-        let num_items = items_of_depth.pop().unwrap();
-        // println!("items outside: {}", num_items);
-        for _ in 0..num_items - 1 {
-            // println!("built an app outside");
-            let f: Idx = items.pop().unwrap();
-            let x: Idx = items.pop().unwrap();
-            items.push(self.add(Node::App(f, x)))
-        }
-        if items.len() != 1 {
-            return Err(format!(
-                "ExprSet parse error: mismatched parens in: {}",
-                s_init
-            ));
-        }
-
         if self.order == Order::ParentFirst {
             self.nodes[init_len..].reverse();
         }
-        Ok(items.pop().unwrap())
+        return Ok(items[items.len() - 1]);
     }
 }
 
@@ -299,12 +436,35 @@ mod tests {
         assert_parse(set, "foo bar baz", "(foo bar baz)");
 
         assert_parse(set, "(lam b)", "(lam b)");
+        assert_parse(set, "(lambda b)", "(lam b)");
+
+        assert_parse(
+            set,
+            "(lambda (fix1 $0 (lambda (lambda (if (empty? (cdr $0)) (cdr $0) (cons (car $0) ($1 (cdr $0))))))))",
+            "(lam (fix1 $0 (lam (lam (if (empty? (cdr $0)) (cdr $0) (cons (car $0) ($1 (cdr $0))))))))"
+        );
 
         assert_parse(set, "lam b", "(lam b)");
         assert_parse(set, "(foo (lam b) (lam c))", "(foo (lam b) (lam c))");
         assert_parse(set, "(lam (+ a b))", "(lam (+ a b))");
         assert_parse(set, "(lam (+ $0 b))", "(lam (+ $0 b))");
         assert_parse(set, "(lam (+ #0 b))", "(lam (+ #0 b))");
+        assert_parse(set, "Const(list(int), Any[])", "Const(Any[])");
+        assert_parse(set, "Const(int, -1)", "Const(-1)");
+        assert_parse(set, "let $v1::int = 1 in $v1", "let $v1 = 1 in $v1");
+        assert_parse(
+            set,
+            "let $v1::list(int) = Const(list(int), Any[]) in let $v2::list(int) = Const(list(int), Any[0]) in \
+                let $v3::list(int) = (concat $v1 $v2) in (concat $inp0 $v3)",
+            "let $v1 = Const(Any[]) in let $v2 = Const(Any[0]) in let $v3 = (concat $v1 $v2) in (concat $inp0 $v3)"
+        );
+        assert_parse(
+            set,
+            "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3::int = 0 in let $v4::int = Const(int, -1) in \
+            let $v5::int = (- $v3 $v4) in let $v6::list(int) = (repeat $v1 $v5) in (concat $inp0 $v6)",
+            "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3 = 0 in let $v4 = Const(-1) in \
+            let $v5 = (- $v3 $v4) in let $v6 = (repeat $v1 $v5) in (concat $inp0 $v6)"
+        );
 
         let e = set.parse_extend("$3").unwrap();
         assert_eq!(set.get(e).node(), &Node::Var(3, -1));
