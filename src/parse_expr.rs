@@ -1,4 +1,7 @@
-use std::fmt::{self, Display, Formatter};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display, Formatter},
+};
 
 use crate::expr::*;
 
@@ -31,8 +34,7 @@ impl Display for Node {
                 Ok(())
             }
             Self::IVar(i) => write!(f, "#{}", i),
-            Node::NVar(name) => write!(f, "${}", name),
-            Node::Const(val) => write!(f, "Const({})", val),
+            Node::NVar(name, _link) => write!(f, "${}", name),
             Node::Let { .. } => write!(f, "let"),
             Node::RevLet { .. } => write!(f, "revlet"),
         }
@@ -47,11 +49,9 @@ impl<'a> Display for Expr<'a> {
             }
 
             match e.node() {
-                Node::Var(_, _)
-                | Node::IVar(_)
-                | Node::Prim(_)
-                | Node::NVar(_)
-                | Node::Const(_) => write!(f, "{}", e.node()),
+                Node::Var(_, _) | Node::IVar(_) | Node::Prim(_) | Node::NVar(_, _) => {
+                    write!(f, "{}", e.node())
+                }
                 Node::App(fun, x) => {
                     // if you are the left side of an application, and you are an application, you dont need parens
                     if !left_of_app {
@@ -158,7 +158,9 @@ fn parse_ivar(s: &str) -> IResult<&str, Vec<Node>> {
 fn parse_nvar(s: &str) -> IResult<&str, Vec<Node>> {
     map_res(
         preceded(tag("$"), take_while1(is_token_char)),
-        |name: &str| -> Result<Vec<Node>, Error<&str>> { Ok(vec![Node::NVar(name.into())]) },
+        |name: &str| -> Result<Vec<Node>, Error<&str>> {
+            Ok(vec![Node::NVar(name.into(), Idx::MAX)])
+        },
     )(s)
 }
 
@@ -261,14 +263,15 @@ fn parse_object(s: &str) -> IResult<&str, &str> {
 
 fn parse_const(s: &str) -> IResult<&str, Vec<Node>> {
     map_res(
-        preceded(
+        recognize(tuple((
             tag("Const("),
-            terminated(
-                tuple((parse_type, tag(","), multispace0, parse_object)),
-                tag(")"),
-            ),
-        ),
-        |(_, _, _, obj)| -> Result<Vec<Node>, Error<&str>> { Ok(vec![Node::Const(obj.into())]) },
+            parse_type,
+            tag(","),
+            multispace0,
+            parse_object,
+            tag(")"),
+        ))),
+        |p| -> Result<Vec<Node>, Error<&str>> { Ok(vec![Node::Prim(p.into())]) },
     )(s)
 }
 
@@ -292,6 +295,7 @@ fn parse_let(s: &str) -> IResult<&str, Vec<Node>> {
                 def: body.len() + 1,
                 body: 1,
             };
+            def.push(node.clone());
             def.append(&mut body);
             def.push(node);
             Ok(def)
@@ -317,12 +321,13 @@ fn parse_let_rev(s: &str) -> IResult<&str, Vec<Node>> {
             let node = Node::RevLet {
                 inp_var: var.into(),
                 def_vars: def_vars.into_iter().map(|s| s.into()).collect(),
-                def: body.len() + 1,
-                body: 1,
+                def: 1,
+                body: def.len() + 1,
             };
-            def.append(&mut body);
-            def.push(node);
-            Ok(def)
+            body.push(node.clone());
+            body.append(&mut def);
+            body.push(node);
+            Ok(body)
         },
     )(s)
 }
@@ -374,32 +379,61 @@ impl ExprSet {
         let nodes = match_res.map_err(|e| e.to_string())?.1;
 
         let mut items: Vec<Idx> = vec![];
+        let mut named_vars_links: HashMap<crate::Symbol, Idx> = HashMap::new();
+        let mut finished_lets = 0;
+        let mut finished_lets_before: HashMap<crate::Symbol, usize> = HashMap::new();
+
         for node in nodes {
             // println!("node: {:?}", node);
             let norm_node = match node {
-                Node::Prim(_)
-                | Node::Var(_, _)
-                | Node::IVar(_)
-                | Node::NVar(_)
-                | Node::Const(_) => node,
+                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => node,
                 Node::App(f, x) => Node::App(items[items.len() - f], items[items.len() - x]),
                 Node::Lam(b, tag) => Node::Lam(items[items.len() - b], tag),
-                Node::Let { var, def, body } => Node::Let {
-                    var,
-                    def: items[items.len() - def],
-                    body: items[items.len() - body],
-                },
+                Node::NVar(ref name, _) => {
+                    if named_vars_links.contains_key(&name) {
+                        Node::NVar(name.clone(), named_vars_links[&name])
+                    } else {
+                        node
+                    }
+                }
+                Node::Let { var, def, body } => {
+                    if named_vars_links.contains_key(&var) {
+                        let def_shift = finished_lets - finished_lets_before[&var];
+                        finished_lets += 1;
+                        Node::Let {
+                            var,
+                            def: items[items.len() + def_shift - def],
+                            body: items[items.len() - body],
+                        }
+                    } else {
+                        let var_link = items.len() - 1;
+                        named_vars_links.insert(var.clone(), items[var_link]);
+                        finished_lets_before.insert(var, finished_lets);
+                        continue;
+                    }
+                }
                 Node::RevLet {
                     inp_var,
                     def_vars,
                     def,
                     body,
-                } => Node::RevLet {
-                    inp_var,
-                    def_vars,
-                    def: items[items.len() - def],
-                    body: items[items.len() - body],
-                },
+                } => {
+                    if named_vars_links.contains_key(&inp_var) {
+                        let body_shift = finished_lets - finished_lets_before[&inp_var];
+                        finished_lets += 1;
+                        Node::RevLet {
+                            inp_var,
+                            def_vars,
+                            def: items[items.len() - def],
+                            body: items[items.len() + body_shift - body],
+                        }
+                    } else {
+                        let var_link = items.len() - 1;
+                        named_vars_links.insert(inp_var.clone(), items[var_link]);
+                        finished_lets_before.insert(inp_var, finished_lets);
+                        continue;
+                    }
+                }
             };
             // println!("norm_node: {:?}", norm_node);
             items.push(self.add(norm_node));
@@ -449,20 +483,21 @@ mod tests {
         assert_parse(set, "(lam (+ a b))", "(lam (+ a b))");
         assert_parse(set, "(lam (+ $0 b))", "(lam (+ $0 b))");
         assert_parse(set, "(lam (+ #0 b))", "(lam (+ #0 b))");
-        assert_parse(set, "Const(list(int), Any[])", "Const(Any[])");
-        assert_parse(set, "Const(int, -1)", "Const(-1)");
+        assert_parse(set, "Const(list(int), Any[])", "Const(list(int), Any[])");
+        assert_parse(set, "Const(int, -1)", "Const(int, -1)");
         assert_parse(set, "let $v1::int = 1 in $v1", "let $v1 = 1 in $v1");
         assert_parse(
             set,
             "let $v1::list(int) = Const(list(int), Any[]) in let $v2::list(int) = Const(list(int), Any[0]) in \
                 let $v3::list(int) = (concat $v1 $v2) in (concat $inp0 $v3)",
-            "let $v1 = Const(Any[]) in let $v2 = Const(Any[0]) in let $v3 = (concat $v1 $v2) in (concat $inp0 $v3)"
+            "let $v1 = Const(list(int), Any[]) in let $v2 = Const(list(int), Any[0]) in let $v3 = (concat $v1 $v2) \
+            in (concat $inp0 $v3)"
         );
         assert_parse(
             set,
             "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3::int = 0 in let $v4::int = Const(int, -1) in \
             let $v5::int = (- $v3 $v4) in let $v6::list(int) = (repeat $v1 $v5) in (concat $inp0 $v6)",
-            "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3 = 0 in let $v4 = Const(-1) in \
+            "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3 = 0 in let $v4 = Const(int, -1) in \
             let $v5 = (- $v3 $v4) in let $v6 = (repeat $v1 $v5) in (concat $inp0 $v6)"
         );
 

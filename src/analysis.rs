@@ -75,6 +75,13 @@ impl Analysis for ExprCost {
                 .unwrap_or(&analyzed.shared.cost_prim_default),
             Node::App(f, x) => analyzed.shared.cost_app + analyzed.nodes[*f] + analyzed.nodes[*x],
             Node::Lam(b, _) => analyzed.shared.cost_lam + analyzed.nodes[*b],
+            Node::NVar(_, _) => analyzed.shared.cost_nvar,
+            Node::Let { def, body, .. } => {
+                analyzed.shared.cost_let + analyzed.nodes[*def] + analyzed.nodes[*body]
+            }
+            Node::RevLet { def, body, .. } => {
+                analyzed.shared.cost_revlet + analyzed.nodes[*def] + analyzed.nodes[*body]
+            }
         }
     }
 }
@@ -92,6 +99,13 @@ impl Analysis for &ExprCost {
                 .unwrap_or(&analyzed.shared.cost_prim_default),
             Node::App(f, x) => analyzed.shared.cost_app + analyzed.nodes[*f] + analyzed.nodes[*x],
             Node::Lam(b, _) => analyzed.shared.cost_lam + analyzed.nodes[*b],
+            Node::NVar(_, _) => analyzed.shared.cost_nvar,
+            Node::Let { def, body, .. } => {
+                analyzed.shared.cost_let + analyzed.nodes[*def] + analyzed.nodes[*body]
+            }
+            Node::RevLet { def, body, .. } => {
+                analyzed.shared.cost_revlet + analyzed.nodes[*def] + analyzed.nodes[*body]
+            }
         }
     }
 }
@@ -107,6 +121,10 @@ impl Analysis for DepthAnalysis {
             Node::Prim(_) => 1,
             Node::App(f, x) => 1 + std::cmp::max(analyzed.nodes[*f], analyzed.nodes[*x]),
             Node::Lam(b, _) => 1 + analyzed.nodes[*b],
+            Node::NVar(_, _) => 1,
+            Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
+                1 + std::cmp::max(analyzed.nodes[*def], analyzed.nodes[*body])
+            }
         }
     }
 }
@@ -129,6 +147,11 @@ impl Analysis for FreeVarAnalysis {
             }
             Node::Lam(b, _) => {
                 free.extend(analyzed[*b].iter().filter(|i| **i > 0).map(|i| i - 1));
+            }
+            Node::NVar(_, _) => {}
+            Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
+                free.extend(analyzed[*def].iter());
+                free.extend(analyzed[*body].iter());
             }
         }
         free
@@ -153,6 +176,11 @@ impl Analysis for IVarAnalysis {
             }
             Node::Lam(b, _) => {
                 free.extend(analyzed[*b].iter());
+            }
+            Node::NVar(_, _) => {}
+            Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
+                free.extend(analyzed[*def].iter());
+                free.extend(analyzed[*body].iter());
             }
         }
         free

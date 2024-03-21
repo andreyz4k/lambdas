@@ -20,13 +20,12 @@ pub static HOLE_SYM: Lazy<Symbol> = Lazy::new(|| Symbol::from("??"));
 /// a Node, while set.get(i) yields an Expr representing the subtree at that node.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Node {
-    Prim(Symbol),  // primitive (eg functions, constants, all nonvariable leaf nodes)
-    Var(i32, Tag), // db index ($i), tag
-    IVar(i32),     // abstraction ("invention") variable
-    App(Idx, Idx), // f, x
-    Lam(Idx, Tag), // body, tag
-    NVar(Symbol),  // named variable
-    Const(Symbol), // constant
+    Prim(Symbol),      // primitive (eg functions, constants, all nonvariable leaf nodes)
+    Var(i32, Tag),     // db index ($i), tag
+    IVar(i32),         // abstraction ("invention") variable
+    App(Idx, Idx),     // f, x
+    Lam(Idx, Tag),     // body, tag
+    NVar(Symbol, Idx), // named variable
     Let {
         // let expression
         var: Symbol,
@@ -109,8 +108,7 @@ impl ExprOwned {
                     .unwrap_or(&cost_fn.cost_prim_default),
                 Node::App(_, _) => cost_fn.cost_app,
                 Node::Lam(_, _) => cost_fn.cost_lam,
-                Node::NVar(_) => cost_fn.cost_nvar,
-                Node::Const(_) => cost_fn.cost_const,
+                Node::NVar(_, _) => cost_fn.cost_nvar,
                 Node::Let { .. } => cost_fn.cost_let,
                 Node::RevLet { .. } => cost_fn.cost_revlet,
             })
@@ -184,11 +182,7 @@ impl ExprSet {
         // push on a new span if we're tracking spans
         if let Some(spans) = &mut self.spans {
             let span = match node {
-                Node::Var(_, _)
-                | Node::Prim(_)
-                | Node::IVar(_)
-                | Node::NVar(_)
-                | Node::Const(_) => idx..idx + 1,
+                Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) | Node::NVar(_, _) => idx..idx + 1,
                 Node::App(f, x) => {
                     min(min(spans[f].start, spans[x].start), idx)
                         ..max(max(spans[f].end, spans[x].end), idx + 1)
@@ -265,7 +259,7 @@ impl<'a> Expr<'a> {
     }
     pub fn children(&self) -> impl Iterator<Item = Idx> {
         match self.node() {
-            Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) | Node::NVar(_) | Node::Const(_) => {
+            Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) | Node::NVar(_, _) => {
                 vec![].into_iter()
             }
             Node::App(f, x) => vec![*f, *x].into_iter(),
@@ -325,8 +319,7 @@ impl<'a> Expr<'a> {
                     .unwrap_or(&cost_fn.cost_prim_default),
                 Node::App(_, _) => cost_fn.cost_app,
                 Node::Lam(_, _) => cost_fn.cost_lam,
-                Node::NVar(_) => cost_fn.cost_nvar,
-                Node::Const(_) => cost_fn.cost_const,
+                Node::NVar(_, _) => cost_fn.cost_nvar,
                 Node::Let { .. } => cost_fn.cost_let,
                 Node::RevLet { .. } => cost_fn.cost_revlet,
             })
@@ -350,8 +343,7 @@ impl<'a> Expr<'a> {
                 cost_fn.cost_app + self.get(*f).cost_rec(cost_fn) + self.get(*x).cost_rec(cost_fn)
             }
             Node::Lam(b, _) => cost_fn.cost_lam + self.get(*b).cost_rec(cost_fn),
-            Node::NVar(_) => cost_fn.cost_nvar,
-            Node::Const(_) => cost_fn.cost_const,
+            Node::NVar(_, _) => cost_fn.cost_nvar,
             Node::Let { .. } => cost_fn.cost_let,
             Node::RevLet { .. } => cost_fn.cost_revlet,
         }
@@ -365,15 +357,12 @@ impl<'a> Expr<'a> {
         other_set.nodes.extend(self.iter_span().map(|i| {
             let node = self.get_node(i);
             match node {
-                Node::Prim(_)
-                | Node::Var(_, _)
-                | Node::IVar(_)
-                | Node::NVar(_)
-                | Node::Const(_) => node.clone(),
+                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => node.clone(),
                 Node::App(f, x) => {
                     Node::App((*f as i32 + shift) as usize, (*x as i32 + shift) as usize)
                 }
                 Node::Lam(b, tag) => Node::Lam((*b as i32 + shift) as usize, *tag),
+                Node::NVar(name, link) => Node::NVar(name.clone(), (*link as i32 + shift) as usize),
                 Node::Let { var, def, body } => Node::Let {
                     var: var.clone(),
                     def: (*def as i32 + shift) as usize,
@@ -426,25 +415,35 @@ impl<'a> Expr<'a> {
     /// will maintain structural hashing
     pub fn copy_rec(self, other_set: &mut ExprSet) -> Idx {
         assert_eq!(self.set.order, other_set.order);
-        fn helper(e: Expr, other_set: &mut ExprSet) -> Idx {
+        let mut new_vars_mapping: HashMap<Symbol, Idx> = HashMap::new();
+        fn helper(
+            e: Expr,
+            other_set: &mut ExprSet,
+            new_vars_mapping: &mut HashMap<Symbol, Idx>,
+        ) -> Idx {
             match e.node() {
-                Node::Prim(_)
-                | Node::Var(_, _)
-                | Node::IVar(_)
-                | Node::NVar(_)
-                | Node::Const(_) => other_set.add(e.node().clone()),
+                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => other_set.add(e.node().clone()),
                 Node::App(f, x) => {
-                    let f = helper(e.get(*f), other_set);
-                    let x = helper(e.get(*x), other_set);
+                    let f = helper(e.get(*f), other_set, new_vars_mapping);
+                    let x = helper(e.get(*x), other_set, new_vars_mapping);
                     other_set.add(Node::App(f, x))
                 }
                 Node::Lam(b, tag) => {
-                    let b = helper(e.get(*b), other_set);
+                    let b = helper(e.get(*b), other_set, new_vars_mapping);
                     other_set.add(Node::Lam(b, *tag))
                 }
+                Node::NVar(name, _link) => {
+                    if let Some(&other_link) = new_vars_mapping.get(name) {
+                        // let link = helper(e.get(*link), other_set, new_vars_mapping);
+                        other_set.add(Node::NVar(name.clone(), other_link))
+                    } else {
+                        other_set.add(e.node().clone())
+                    }
+                }
                 Node::Let { var, def, body } => {
-                    let def = helper(e.get(*def), other_set);
-                    let body = helper(e.get(*body), other_set);
+                    let def = helper(e.get(*def), other_set, new_vars_mapping);
+                    new_vars_mapping.insert(var.clone(), def);
+                    let body = helper(e.get(*body), other_set, new_vars_mapping);
                     other_set.add(Node::Let {
                         var: var.clone(),
                         def,
@@ -457,8 +456,9 @@ impl<'a> Expr<'a> {
                     def,
                     body,
                 } => {
-                    let def = helper(e.get(*def), other_set);
-                    let body = helper(e.get(*body), other_set);
+                    let body = helper(e.get(*body), other_set, new_vars_mapping);
+                    new_vars_mapping.insert(inp_var.clone(), body);
+                    let def = helper(e.get(*def), other_set, new_vars_mapping);
                     other_set.add(Node::RevLet {
                         inp_var: inp_var.clone(),
                         def_vars: def_vars.clone(),
@@ -469,7 +469,7 @@ impl<'a> Expr<'a> {
             }
         }
 
-        helper(self, other_set)
+        helper(self, other_set, &mut new_vars_mapping)
     }
 
     /// return true if the node at this expr obeys the defined node order
@@ -488,8 +488,11 @@ impl<'a> Expr<'a> {
                 Order::ParentFirst => *b == HOLE || *b > self.idx,
                 Order::Any => *b != self.idx,
             },
-            Node::NVar(_) => true,
-            Node::Const(_) => true,
+            Node::NVar(_, link) => match self.set.order {
+                Order::ChildFirst => *link == HOLE || *link < self.idx,
+                Order::ParentFirst => *link == HOLE || *link > self.idx,
+                Order::Any => *link != self.idx,
+            },
             Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => match self.set.order {
                 Order::ChildFirst => {
                     (*def == HOLE || *def < self.idx) && (*body == HOLE || *body < self.idx)
@@ -646,8 +649,13 @@ impl<'a> ExprMut<'a> {
                     .shift(incr_by, init_depth + 1, analyzed_free_vars);
                 self.set.add(Node::Lam(b, tag))
             }
-            Node::NVar(_) => self.idx,
-            Node::Const(_) => self.idx,
+            Node::NVar(_name, _link) => {
+                // let link = self
+                //     .get(link)
+                //     .shift(incr_by, init_depth, analyzed_free_vars);
+                // self.set.add(Node::NVar(name, link))
+                self.idx
+            }
             Node::Let { var, def, body } => {
                 let def = self.get(def).shift(incr_by, init_depth, analyzed_free_vars);
                 let body = self
@@ -709,7 +717,6 @@ pub struct ExprCost {
     pub cost_prim: HashMap<Symbol, i32>,
     pub cost_prim_default: i32,
     pub cost_nvar: i32,
-    pub cost_const: i32,
     pub cost_let: i32,
     pub cost_revlet: i32,
 }
@@ -724,7 +731,6 @@ impl ExprCost {
             cost_prim: HashMap::new(),
             cost_prim_default: 100,
             cost_nvar: 1,
-            cost_const: 100,
             cost_let: 1,
             cost_revlet: 1,
         }
@@ -738,7 +744,6 @@ impl ExprCost {
             cost_prim: HashMap::new(),
             cost_prim_default: 1,
             cost_nvar: 0,
-            cost_const: 1,
             cost_let: 0,
             cost_revlet: 0,
         }
@@ -752,7 +757,6 @@ impl ExprCost {
             cost_prim: HashMap::new(),
             cost_prim_default: 1,
             cost_nvar: 1,
-            cost_const: 1,
             cost_let: 1,
             cost_revlet: 1,
         }
