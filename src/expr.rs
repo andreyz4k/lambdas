@@ -29,6 +29,7 @@ pub enum Node {
     Let {
         // let expression
         var: Symbol,
+        type_str: Symbol,
         def: Idx,
         body: Idx,
     },
@@ -363,8 +364,14 @@ impl<'a> Expr<'a> {
                 }
                 Node::Lam(b, tag) => Node::Lam((*b as i32 + shift) as usize, *tag),
                 Node::NVar(name, link) => Node::NVar(name.clone(), (*link as i32 + shift) as usize),
-                Node::Let { var, def, body } => Node::Let {
+                Node::Let {
+                    var,
+                    type_str,
+                    def,
+                    body,
+                } => Node::Let {
                     var: var.clone(),
+                    type_str: type_str.clone(),
                     def: (*def as i32 + shift) as usize,
                     body: (*body as i32 + shift) as usize,
                 },
@@ -440,12 +447,18 @@ impl<'a> Expr<'a> {
                         other_set.add(e.node().clone())
                     }
                 }
-                Node::Let { var, def, body } => {
+                Node::Let {
+                    var,
+                    type_str,
+                    def,
+                    body,
+                } => {
                     let def = helper(e.get(*def), other_set, new_vars_mapping);
                     new_vars_mapping.insert(var.clone(), def);
                     let body = helper(e.get(*body), other_set, new_vars_mapping);
                     other_set.add(Node::Let {
                         var: var.clone(),
+                        type_str: type_str.clone(),
                         def,
                         body,
                     })
@@ -656,12 +669,22 @@ impl<'a> ExprMut<'a> {
                 // self.set.add(Node::NVar(name, link))
                 self.idx
             }
-            Node::Let { var, def, body } => {
+            Node::Let {
+                var,
+                type_str,
+                def,
+                body,
+            } => {
                 let def = self.get(def).shift(incr_by, init_depth, analyzed_free_vars);
                 let body = self
                     .get(body)
                     .shift(incr_by, init_depth, analyzed_free_vars);
-                self.set.add(Node::Let { var, def, body })
+                self.set.add(Node::Let {
+                    var,
+                    type_str,
+                    def,
+                    body,
+                })
             }
             Node::RevLet {
                 inp_var,
@@ -730,7 +753,7 @@ impl ExprCost {
             cost_ivar: 100,
             cost_prim: HashMap::new(),
             cost_prim_default: 100,
-            cost_nvar: 1,
+            cost_nvar: 100,
             cost_let: 1,
             cost_revlet: 1,
         }
@@ -743,7 +766,7 @@ impl ExprCost {
             cost_ivar: 1,
             cost_prim: HashMap::new(),
             cost_prim_default: 1,
-            cost_nvar: 0,
+            cost_nvar: 1,
             cost_let: 0,
             cost_revlet: 0,
         }

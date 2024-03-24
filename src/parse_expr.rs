@@ -75,8 +75,13 @@ impl<'a> Display for Expr<'a> {
                     fmt_local(e.get(*b), false, f)?;
                     write!(f, ")")
                 }
-                Node::Let { var, def, body } => {
-                    write!(f, "let ${} = ", var)?;
+                Node::Let {
+                    var,
+                    type_str,
+                    def,
+                    body,
+                } => {
+                    write!(f, "let ${}::{} = ", var, type_str)?;
                     fmt_local(e.get(*def), false, f)?;
                     write!(f, " in ")?;
                     fmt_local(e.get(*body), false, f)
@@ -289,9 +294,10 @@ fn parse_let(s: &str) -> IResult<&str, Vec<Node>> {
                 parse_program,
             )),
         ),
-        |(var, _, _, _, mut def, _, mut body)| -> Result<Vec<Node>, Error<&str>> {
+        |(var, _, type_str, _, mut def, _, mut body)| -> Result<Vec<Node>, Error<&str>> {
             let node = Node::Let {
                 var: var.into(),
+                type_str: type_str.into(),
                 def: body.len() + 1,
                 body: 1,
             };
@@ -396,12 +402,18 @@ impl ExprSet {
                         node
                     }
                 }
-                Node::Let { var, def, body } => {
+                Node::Let {
+                    var,
+                    type_str,
+                    def,
+                    body,
+                } => {
                     if named_vars_links.contains_key(&var) {
                         let def_shift = finished_lets - finished_lets_before[&var];
                         finished_lets += 1;
                         Node::Let {
                             var,
+                            type_str,
                             def: items[items.len() + def_shift - def],
                             body: items[items.len() - body],
                         }
@@ -485,20 +497,20 @@ mod tests {
         assert_parse(set, "(lam (+ #0 b))", "(lam (+ #0 b))");
         assert_parse(set, "Const(list(int), Any[])", "Const(list(int), Any[])");
         assert_parse(set, "Const(int, -1)", "Const(int, -1)");
-        assert_parse(set, "let $v1::int = 1 in $v1", "let $v1 = 1 in $v1");
+        assert_parse(set, "let $v1::int = 1 in $v1", "let $v1::int = 1 in $v1");
         assert_parse(
             set,
             "let $v1::list(int) = Const(list(int), Any[]) in let $v2::list(int) = Const(list(int), Any[0]) in \
                 let $v3::list(int) = (concat $v1 $v2) in (concat $inp0 $v3)",
-            "let $v1 = Const(list(int), Any[]) in let $v2 = Const(list(int), Any[0]) in let $v3 = (concat $v1 $v2) \
-            in (concat $inp0 $v3)"
+            "let $v1::list(int) = Const(list(int), Any[]) in let $v2::list(int) = Const(list(int), Any[0]) in \
+            let $v3::list(int) = (concat $v1 $v2) in (concat $inp0 $v3)"
         );
         assert_parse(
             set,
             "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3::int = 0 in let $v4::int = Const(int, -1) in \
             let $v5::int = (- $v3 $v4) in let $v6::list(int) = (repeat $v1 $v5) in (concat $inp0 $v6)",
-            "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3 = 0 in let $v4 = Const(int, -1) in \
-            let $v5 = (- $v3 $v4) in let $v6 = (repeat $v1 $v5) in (concat $inp0 $v6)"
+            "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3::int = 0 in let $v4::int = Const(int, -1) in \
+            let $v5::int = (- $v3 $v4) in let $v6::list(int) = (repeat $v1 $v5) in (concat $inp0 $v6)"
         );
 
         let e = set.parse_extend("$3").unwrap();
