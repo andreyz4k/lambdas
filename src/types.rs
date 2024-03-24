@@ -43,6 +43,10 @@ impl Args {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// get the ith argument
     pub fn get(&self, i: usize) -> Option<Idx> {
         match self {
@@ -306,7 +310,7 @@ impl TypeSet {
             .borrow()
             .iter()
             .rfind(|(i, _)| *i == var)
-            .map(|(_, tp)| tp.clone())
+            .map(|(_, tp)| *tp)
     }
     /// set what a variable is bound to
     #[inline(always)]
@@ -414,9 +418,6 @@ impl Type {
 
     pub fn is_arrow(&self, set: &TypeSet) -> bool {
         let (node, _) = self.node(set);
-        match node {
-            TNode::Arrow(_, _) => true,
-            _ => false,
-        }
+        matches!(node, TNode::Arrow(_, _))
     }
 }

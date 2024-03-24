@@ -396,7 +396,7 @@ impl ExprSet {
                 Node::App(f, x) => Node::App(items[items.len() - f], items[items.len() - x]),
                 Node::Lam(b, tag) => Node::Lam(items[items.len() - b], tag),
                 Node::NVar(ref name, _) => {
-                    if named_vars_links.contains_key(&name) {
+                    if named_vars_links.contains_key(name) {
                         Node::NVar(name.clone(), named_vars_links[&name])
                     } else {
                         node
@@ -454,7 +454,7 @@ impl ExprSet {
         if self.order == Order::ParentFirst {
             self.nodes[init_len..].reverse();
         }
-        return Ok(items[items.len() - 1]);
+        Ok(items[items.len() - 1])
     }
 }
 
