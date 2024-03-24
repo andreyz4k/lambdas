@@ -464,6 +464,9 @@ impl<'a> Expr<'a> {
                 unimplemented!();
             }
             Node::Prim(p) => Ok(dsl.type_of_prim(p).instantiate(ctx)),
+            Node::NVar(_, _) => unimplemented!(),
+            Node::Let { .. } => unimplemented!(),
+            Node::RevLet { .. } => unimplemented!(),
         }
     }
     // pub fn infer_ref<D: Domain>(&self, ctx: &mut TypeSet, env: &mut VecDeque<TypeRef>) -> Result<TypeRef,UnifyErr> {
