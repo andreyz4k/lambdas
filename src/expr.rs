@@ -883,10 +883,10 @@ mod tests {
         let mut num_terminals = AnalyzedExpr::new(ExprCost::num_terminals());
         let mut depth = AnalyzedExpr::new(DepthAnalysis);
         let idx = e.parse_extend("(foo bar) (foo bar)").unwrap();
-        assert_eq!(*cost.analyze_get(e.get(idx)), 403);
+        assert_eq!((*cost.analyze_get(e.get(idx))).0, 403);
         assert_eq!(*depth.analyze_get(e.get(idx)), 3);
-        assert_eq!(*num_nodes.analyze_get(e.get(idx)), 7);
-        assert_eq!(*num_terminals.analyze_get(e.get(idx)), 4);
+        assert_eq!((*num_nodes.analyze_get(e.get(idx))).0, 7);
+        assert_eq!((*num_terminals.analyze_get(e.get(idx))).0, 4);
 
         let idx = e.parse_extend("(lam (lam ($1 #0 $2)))").unwrap();
         assert_eq!(

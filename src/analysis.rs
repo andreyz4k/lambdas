@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::ops::Index;
 
 use crate::*;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A bottom up statich analysis with shared data `A` along with
 /// local data `A::Item` for each node.
@@ -63,48 +63,90 @@ impl Analysis for () {
 }
 
 impl Analysis for ExprCost {
-    type Item = i32;
+    type Item = (i32, FxHashMap<Symbol, i32>, FxHashMap<Symbol, i32>);
     fn new(e: Expr, analyzed: &AnalyzedExpr<Self>) -> Self::Item {
         match e.node() {
-            Node::IVar(_) => analyzed.shared.cost_ivar,
-            Node::Var(_, _) => analyzed.shared.cost_var,
-            Node::Prim(p) => *analyzed
-                .shared
-                .cost_prim
-                .get(p)
-                .unwrap_or(&analyzed.shared.cost_prim_default),
-            Node::App(f, x) => analyzed.shared.cost_app + analyzed.nodes[*f] + analyzed.nodes[*x],
-            Node::Lam(b, _) => analyzed.shared.cost_lam + analyzed.nodes[*b],
-            Node::NVar(_, _) => analyzed.shared.cost_nvar,
-            Node::Let { def, body, .. } => {
-                analyzed.shared.cost_let + analyzed.nodes[*def] + analyzed.nodes[*body]
+            Node::IVar(_) => (
+                analyzed.shared.cost_ivar,
+                FxHashMap::default(),
+                FxHashMap::default(),
+            ),
+            Node::Var(_, _) => (
+                analyzed.shared.cost_var,
+                FxHashMap::default(),
+                FxHashMap::default(),
+            ),
+            Node::Prim(p) => (
+                *analyzed
+                    .shared
+                    .cost_prim
+                    .get(p)
+                    .unwrap_or(&analyzed.shared.cost_prim_default),
+                FxHashMap::default(),
+                FxHashMap::default(),
+            ),
+            Node::NVar(name, link) => {
+                let (cost, mut used_vars, mut nvars_cost) = if *link == Idx::MAX {
+                    (0, FxHashMap::default(), FxHashMap::default())
+                } else {
+                    analyzed.nodes[*link].clone()
+                };
+                used_vars.insert(name.clone(), 1);
+                nvars_cost.insert(name.clone(), cost);
+                (cost + analyzed.shared.cost_nvar, used_vars, nvars_cost)
             }
-            Node::RevLet { def, body, .. } => {
-                analyzed.shared.cost_revlet + analyzed.nodes[*def] + analyzed.nodes[*body]
+            Node::App(f, x) => {
+                let (cost_f, mut used_vars_f, mut nvars_cost_f) = analyzed.nodes[*f].clone();
+                let (cost_x, used_vars_x, nvars_cost_x) = analyzed.nodes[*x].clone();
+                used_vars_x.into_iter().for_each(|(k, v)| {
+                    used_vars_f.entry(k).and_modify(|v2| *v2 += v).or_insert(v);
+                });
+                nvars_cost_x.into_iter().for_each(|(k, v)| {
+                    nvars_cost_f.entry(k).or_insert(v);
+                });
+                (
+                    analyzed.shared.cost_app + cost_f + cost_x,
+                    used_vars_f,
+                    nvars_cost_f,
+                )
             }
-        }
-    }
-}
+            Node::Lam(b, _) => {
+                let (cost_b, used_vars, nvars_cost) = analyzed.nodes[*b].clone();
+                (analyzed.shared.cost_lam + cost_b, used_vars, nvars_cost)
+            }
+            Node::Let { var, def, body, .. } => {
+                let (cost_def, used_vars_def, _) = analyzed.nodes[*def].clone();
+                let (cost_body, mut used_vars_body, _) = analyzed.nodes[*body].clone();
+                let cost = analyzed.shared.cost_let + cost_def + cost_body
+                    - cost_def * used_vars_body[&var];
+                used_vars_def.into_iter().for_each(|(k, v)| {
+                    used_vars_body
+                        .entry(k)
+                        .and_modify(|v2| *v2 += v)
+                        .or_insert(v);
+                });
+                used_vars_body.remove(var);
+                (cost, used_vars_body, FxHashMap::default())
+            }
+            Node::RevLet {
+                inp_var,
+                def_vars,
+                def,
+                body,
+            } => {
+                let (cost_def, used_vars_def, nvars_cost_def) = analyzed.nodes[*def].clone();
+                let (cost_body, mut used_vars_body, _) = analyzed.nodes[*body].clone();
+                let mut cost = analyzed.shared.cost_revlet + cost_def + cost_body;
+                for var in def_vars {
+                    cost -= nvars_cost_def[var] * used_vars_def[var];
+                    used_vars_body.remove(var);
+                }
+                used_vars_body
+                    .entry(inp_var.clone())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
 
-impl Analysis for &ExprCost {
-    type Item = i32;
-    fn new(e: Expr, analyzed: &AnalyzedExpr<Self>) -> Self::Item {
-        match e.node() {
-            Node::IVar(_) => analyzed.shared.cost_ivar,
-            Node::Var(_, _) => analyzed.shared.cost_var,
-            Node::Prim(p) => *analyzed
-                .shared
-                .cost_prim
-                .get(p)
-                .unwrap_or(&analyzed.shared.cost_prim_default),
-            Node::App(f, x) => analyzed.shared.cost_app + analyzed.nodes[*f] + analyzed.nodes[*x],
-            Node::Lam(b, _) => analyzed.shared.cost_lam + analyzed.nodes[*b],
-            Node::NVar(_, _) => analyzed.shared.cost_nvar,
-            Node::Let { def, body, .. } => {
-                analyzed.shared.cost_let + analyzed.nodes[*def] + analyzed.nodes[*body]
-            }
-            Node::RevLet { def, body, .. } => {
-                analyzed.shared.cost_revlet + analyzed.nodes[*def] + analyzed.nodes[*body]
+                (cost, used_vars_body, FxHashMap::default())
             }
         }
     }
