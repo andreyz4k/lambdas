@@ -86,11 +86,13 @@ impl Analysis for ExprCost {
                 FxHashMap::default(),
             ),
             Node::NVar(name, link) => {
-                let (cost, mut used_vars, mut nvars_cost) = if *link == Idx::MAX {
-                    (0, FxHashMap::default(), FxHashMap::default())
+                let cost = if *link == Idx::MAX {
+                    0
                 } else {
-                    analyzed.nodes[*link].clone()
+                    analyzed.nodes[*link].0
                 };
+                let mut used_vars = FxHashMap::default();
+                let mut nvars_cost = FxHashMap::default();
                 used_vars.insert(name.clone(), 1);
                 nvars_cost.insert(name.clone(), cost);
                 (cost + analyzed.shared.cost_nvar, used_vars, nvars_cost)
@@ -115,8 +117,9 @@ impl Analysis for ExprCost {
                 (analyzed.shared.cost_lam + cost_b, used_vars, nvars_cost)
             }
             Node::Let { var, def, body, .. } => {
-                let (cost_def, used_vars_def, _) = analyzed.nodes[*def].clone();
-                let (cost_body, mut used_vars_body, _) = analyzed.nodes[*body].clone();
+                let (cost_def, used_vars_def, nvars_cost_def) = analyzed.nodes[*def].clone();
+                let (cost_body, mut used_vars_body, mut nvars_cost_body) =
+                    analyzed.nodes[*body].clone();
                 let cost = analyzed.shared.cost_let + cost_def + cost_body
                     - cost_def * used_vars_body[&var];
                 used_vars_def.into_iter().for_each(|(k, v)| {
@@ -126,7 +129,11 @@ impl Analysis for ExprCost {
                         .or_insert(v);
                 });
                 used_vars_body.remove(var);
-                (cost, used_vars_body, FxHashMap::default())
+                nvars_cost_def.into_iter().for_each(|(k, v)| {
+                    nvars_cost_body.entry(k).or_insert(v);
+                });
+                nvars_cost_body.remove(var);
+                (cost, used_vars_body, nvars_cost_body)
             }
             Node::RevLet {
                 inp_var,
@@ -135,18 +142,22 @@ impl Analysis for ExprCost {
                 body,
             } => {
                 let (cost_def, used_vars_def, nvars_cost_def) = analyzed.nodes[*def].clone();
-                let (cost_body, mut used_vars_body, _) = analyzed.nodes[*body].clone();
+                let (cost_body, mut used_vars_body, mut nvars_cost_body) =
+                    analyzed.nodes[*body].clone();
                 let mut cost = analyzed.shared.cost_revlet + cost_def + cost_body;
                 for var in def_vars {
                     cost -= nvars_cost_def[var] * used_vars_def[var];
                     used_vars_body.remove(var);
+                    nvars_cost_body.remove(var);
                 }
                 used_vars_body
                     .entry(inp_var.clone())
                     .and_modify(|v| *v += 1)
                     .or_insert(1);
 
-                (cost, used_vars_body, FxHashMap::default())
+                nvars_cost_body.insert(inp_var.clone(), cost_def);
+
+                (cost, used_vars_body, nvars_cost_body)
             }
         }
     }
