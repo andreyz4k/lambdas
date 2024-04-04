@@ -470,8 +470,8 @@ impl<'a> Expr<'a> {
                     body,
                 } => {
                     let body = helper(e.get(*body), other_set, new_vars_mapping);
-                    new_vars_mapping.insert(inp_var.clone(), body);
                     let def = helper(e.get(*def), other_set, new_vars_mapping);
+                    new_vars_mapping.insert(inp_var.clone(), def);
                     other_set.add(Node::RevLet {
                         inp_var: inp_var.clone(),
                         def_vars: def_vars.clone(),

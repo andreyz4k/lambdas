@@ -330,7 +330,6 @@ fn parse_let_rev(s: &str) -> IResult<&str, Vec<Node>> {
                 def: 1,
                 body: def.len() + 1,
             };
-            body.push(node.clone());
             body.append(&mut def);
             body.push(node);
             Ok(body)
@@ -430,20 +429,13 @@ impl ExprSet {
                     def,
                     body,
                 } => {
-                    if named_vars_links.contains_key(&inp_var) {
-                        let body_shift = finished_lets - finished_lets_before[&inp_var];
-                        finished_lets += 1;
-                        Node::RevLet {
-                            inp_var,
-                            def_vars,
-                            def: items[items.len() - def],
-                            body: items[items.len() + body_shift - body],
-                        }
-                    } else {
-                        let var_link = items.len() - 1;
-                        named_vars_links.insert(inp_var.clone(), items[var_link]);
-                        finished_lets_before.insert(inp_var, finished_lets);
-                        continue;
+                    let var_link = items.len() - def;
+                    named_vars_links.insert(inp_var.clone(), items[var_link]);
+                    Node::RevLet {
+                        inp_var,
+                        def_vars,
+                        def: items[items.len() - def],
+                        body: items[items.len() - body],
                     }
                 }
             };
