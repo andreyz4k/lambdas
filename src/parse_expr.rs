@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{self, Display, Formatter},
 };
 
@@ -385,6 +385,7 @@ impl ExprSet {
 
         let mut items: Vec<Idx> = vec![];
         let mut named_vars_links: HashMap<crate::Symbol, Idx> = HashMap::new();
+        let mut mult_def_vars: HashSet<crate::Symbol> = HashSet::new();
         let mut finished_lets = 0;
         let mut finished_lets_before: HashMap<crate::Symbol, usize> = HashMap::new();
 
@@ -395,7 +396,7 @@ impl ExprSet {
                 Node::App(f, x) => Node::App(items[items.len() - f], items[items.len() - x]),
                 Node::Lam(b, tag) => Node::Lam(items[items.len() - b], tag),
                 Node::NVar(ref name, _) => {
-                    if named_vars_links.contains_key(name) {
+                    if !mult_def_vars.contains(name) && named_vars_links.contains_key(name) {
                         Node::NVar(name.clone(), named_vars_links[&name])
                     } else {
                         node
@@ -429,12 +430,18 @@ impl ExprSet {
                     def,
                     body,
                 } => {
-                    let var_link = items.len() - def;
-                    named_vars_links.insert(inp_var.clone(), items[var_link]);
+                    let var_link = items[items.len() - def];
+                    if named_vars_links.contains_key(&inp_var)
+                        && named_vars_links[&inp_var] != var_link
+                    {
+                        mult_def_vars.insert(inp_var.clone());
+                    } else {
+                        named_vars_links.insert(inp_var.clone(), var_link);
+                    }
                     Node::RevLet {
                         inp_var,
                         def_vars,
-                        def: items[items.len() - def],
+                        def: var_link,
                         body: items[items.len() - body],
                     }
                 }

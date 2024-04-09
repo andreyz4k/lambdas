@@ -1,6 +1,6 @@
 use crate::*;
 use once_cell::sync::Lazy;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::cmp::{max, min};
 use std::collections::HashMap;
@@ -422,25 +422,28 @@ impl<'a> Expr<'a> {
     /// will maintain structural hashing
     pub fn copy_rec(self, other_set: &mut ExprSet) -> Idx {
         assert_eq!(self.set.order, other_set.order);
-        let mut new_vars_mapping: HashMap<Symbol, Idx> = HashMap::new();
+        let mut new_vars_mapping: FxHashMap<Symbol, Idx> = Default::default();
+        let mut mult_def_vars: FxHashSet<Symbol> = Default::default();
         fn helper(
             e: Expr,
             other_set: &mut ExprSet,
-            new_vars_mapping: &mut HashMap<Symbol, Idx>,
+            new_vars_mapping: &mut FxHashMap<Symbol, Idx>,
+            mult_def_vars: &mut FxHashSet<Symbol>,
         ) -> Idx {
             match e.node() {
                 Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => other_set.add(e.node().clone()),
                 Node::App(f, x) => {
-                    let f = helper(e.get(*f), other_set, new_vars_mapping);
-                    let x = helper(e.get(*x), other_set, new_vars_mapping);
+                    let f = helper(e.get(*f), other_set, new_vars_mapping, mult_def_vars);
+                    let x = helper(e.get(*x), other_set, new_vars_mapping, mult_def_vars);
                     other_set.add(Node::App(f, x))
                 }
                 Node::Lam(b, tag) => {
-                    let b = helper(e.get(*b), other_set, new_vars_mapping);
+                    let b = helper(e.get(*b), other_set, new_vars_mapping, mult_def_vars);
                     other_set.add(Node::Lam(b, *tag))
                 }
                 Node::NVar(name, _link) => {
-                    if let Some(&other_link) = new_vars_mapping.get(name) {
+                    if !mult_def_vars.contains(name) && new_vars_mapping.contains_key(name) {
+                        let other_link = new_vars_mapping[name];
                         // let link = helper(e.get(*link), other_set, new_vars_mapping);
                         other_set.add(Node::NVar(name.clone(), other_link))
                     } else {
@@ -453,9 +456,9 @@ impl<'a> Expr<'a> {
                     def,
                     body,
                 } => {
-                    let def = helper(e.get(*def), other_set, new_vars_mapping);
+                    let def = helper(e.get(*def), other_set, new_vars_mapping, mult_def_vars);
                     new_vars_mapping.insert(var.clone(), def);
-                    let body = helper(e.get(*body), other_set, new_vars_mapping);
+                    let body = helper(e.get(*body), other_set, new_vars_mapping, mult_def_vars);
                     other_set.add(Node::Let {
                         var: var.clone(),
                         type_str: type_str.clone(),
@@ -469,9 +472,14 @@ impl<'a> Expr<'a> {
                     def,
                     body,
                 } => {
-                    let body = helper(e.get(*body), other_set, new_vars_mapping);
-                    let def = helper(e.get(*def), other_set, new_vars_mapping);
-                    new_vars_mapping.insert(inp_var.clone(), def);
+                    let body = helper(e.get(*body), other_set, new_vars_mapping, mult_def_vars);
+                    let def = helper(e.get(*def), other_set, new_vars_mapping, mult_def_vars);
+                    if new_vars_mapping.contains_key(&inp_var) && new_vars_mapping[&inp_var] != def
+                    {
+                        mult_def_vars.insert(inp_var.clone());
+                    } else {
+                        new_vars_mapping.insert(inp_var.clone(), def);
+                    }
                     other_set.add(Node::RevLet {
                         inp_var: inp_var.clone(),
                         def_vars: def_vars.clone(),
@@ -482,7 +490,7 @@ impl<'a> Expr<'a> {
             }
         }
 
-        helper(self, other_set, &mut new_vars_mapping)
+        helper(self, other_set, &mut new_vars_mapping, &mut mult_def_vars)
     }
 
     /// return true if the node at this expr obeys the defined node order
