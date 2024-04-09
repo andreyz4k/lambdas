@@ -474,8 +474,7 @@ impl<'a> Expr<'a> {
                 } => {
                     let body = helper(e.get(*body), other_set, new_vars_mapping, mult_def_vars);
                     let def = helper(e.get(*def), other_set, new_vars_mapping, mult_def_vars);
-                    if new_vars_mapping.contains_key(&inp_var) && new_vars_mapping[&inp_var] != def
-                    {
+                    if new_vars_mapping.contains_key(inp_var) && new_vars_mapping[&inp_var] != def {
                         mult_def_vars.insert(inp_var.clone());
                     } else {
                         new_vars_mapping.insert(inp_var.clone(), def);
