@@ -20,12 +20,13 @@ pub static HOLE_SYM: Lazy<Symbol> = Lazy::new(|| Symbol::from("??"));
 /// a Node, while set.get(i) yields an Expr representing the subtree at that node.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Node {
-    Prim(Symbol),      // primitive (eg functions, constants, all nonvariable leaf nodes)
-    Var(i32, Tag),     // db index ($i), tag
-    IVar(i32),         // abstraction ("invention") variable
-    App(Idx, Idx),     // f, x
-    Lam(Idx, Tag),     // body, tag
-    NVar(Symbol, Idx), // named variable
+    Prim(Symbol),          // primitive (eg functions, constants, all nonvariable leaf nodes)
+    Var(i32, Tag),         // db index ($i), tag
+    IVar(i32),             // abstraction ("invention") variable
+    App(Idx, Idx),         // f, x
+    Lam(Idx, Tag),         // body, tag
+    NVar(Symbol),          // named variable
+    NLinkVar(Symbol, Idx), // named variable with a link to definition
     Let {
         // let expression
         var: Symbol,
@@ -109,7 +110,7 @@ impl ExprOwned {
                     .unwrap_or(&cost_fn.cost_prim_default),
                 Node::App(_, _) => cost_fn.cost_app,
                 Node::Lam(_, _) => cost_fn.cost_lam,
-                Node::NVar(_, _) => cost_fn.cost_nvar,
+                Node::NVar(_) | Node::NLinkVar(_, _) => cost_fn.cost_nvar,
                 Node::Let { .. } => cost_fn.cost_let,
                 Node::RevLet { .. } => cost_fn.cost_revlet,
             })
@@ -183,7 +184,11 @@ impl ExprSet {
         // push on a new span if we're tracking spans
         if let Some(spans) = &mut self.spans {
             let span = match node {
-                Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) | Node::NVar(_, _) => idx..idx + 1,
+                Node::Var(_, _)
+                | Node::Prim(_)
+                | Node::IVar(_)
+                | Node::NVar(_)
+                | Node::NLinkVar(_, _) => idx..idx + 1,
                 Node::App(f, x) => {
                     min(min(spans[f].start, spans[x].start), idx)
                         ..max(max(spans[f].end, spans[x].end), idx + 1)
@@ -260,9 +265,11 @@ impl<'a> Expr<'a> {
     }
     pub fn children(&self) -> impl Iterator<Item = Idx> {
         match self.node() {
-            Node::Var(_, _) | Node::Prim(_) | Node::IVar(_) | Node::NVar(_, _) => {
-                vec![].into_iter()
-            }
+            Node::Var(_, _)
+            | Node::Prim(_)
+            | Node::IVar(_)
+            | Node::NVar(_)
+            | Node::NLinkVar(_, _) => vec![].into_iter(),
             Node::App(f, x) => vec![*f, *x].into_iter(),
             Node::Lam(b, _) => vec![*b].into_iter(),
             Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
@@ -320,7 +327,7 @@ impl<'a> Expr<'a> {
                     .unwrap_or(&cost_fn.cost_prim_default),
                 Node::App(_, _) => cost_fn.cost_app,
                 Node::Lam(_, _) => cost_fn.cost_lam,
-                Node::NVar(_, _) => cost_fn.cost_nvar,
+                Node::NVar(_) | Node::NLinkVar(_, _) => cost_fn.cost_nvar,
                 Node::Let { .. } => cost_fn.cost_let,
                 Node::RevLet { .. } => cost_fn.cost_revlet,
             })
@@ -344,7 +351,7 @@ impl<'a> Expr<'a> {
                 cost_fn.cost_app + self.get(*f).cost_rec(cost_fn) + self.get(*x).cost_rec(cost_fn)
             }
             Node::Lam(b, _) => cost_fn.cost_lam + self.get(*b).cost_rec(cost_fn),
-            Node::NVar(_, _) => cost_fn.cost_nvar,
+            Node::NVar(_) | Node::NLinkVar(_, _) => cost_fn.cost_nvar,
             Node::Let { .. } => cost_fn.cost_let,
             Node::RevLet { .. } => cost_fn.cost_revlet,
         }
@@ -363,7 +370,10 @@ impl<'a> Expr<'a> {
                     Node::App((*f as i32 + shift) as usize, (*x as i32 + shift) as usize)
                 }
                 Node::Lam(b, tag) => Node::Lam((*b as i32 + shift) as usize, *tag),
-                Node::NVar(name, link) => Node::NVar(name.clone(), (*link as i32 + shift) as usize),
+                Node::NVar(name) => Node::NVar(name.clone()),
+                Node::NLinkVar(name, link) => {
+                    Node::NLinkVar(name.clone(), (*link as i32 + shift) as usize)
+                }
                 Node::Let {
                     var,
                     type_str,
@@ -431,7 +441,9 @@ impl<'a> Expr<'a> {
             mult_def_vars: &mut FxHashSet<Symbol>,
         ) -> Idx {
             match e.node() {
-                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => other_set.add(e.node().clone()),
+                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) | Node::NVar(_) => {
+                    other_set.add(e.node().clone())
+                }
                 Node::App(f, x) => {
                     let f = helper(e.get(*f), other_set, new_vars_mapping, mult_def_vars);
                     let x = helper(e.get(*x), other_set, new_vars_mapping, mult_def_vars);
@@ -441,13 +453,14 @@ impl<'a> Expr<'a> {
                     let b = helper(e.get(*b), other_set, new_vars_mapping, mult_def_vars);
                     other_set.add(Node::Lam(b, *tag))
                 }
-                Node::NVar(name, _link) => {
+                Node::NLinkVar(name, _link) => {
                     if !mult_def_vars.contains(name) && new_vars_mapping.contains_key(name) {
                         let other_link = new_vars_mapping[name];
                         // let link = helper(e.get(*link), other_set, new_vars_mapping);
-                        other_set.add(Node::NVar(name.clone(), other_link))
+                        other_set.add(Node::NLinkVar(name.clone(), other_link))
                     } else {
-                        other_set.add(e.node().clone())
+                        unreachable!("NLinkVar should not be in this state");
+                        // other_set.add(e.node().clone())
                     }
                 }
                 Node::Let {
@@ -495,7 +508,7 @@ impl<'a> Expr<'a> {
     /// return true if the node at this expr obeys the defined node order
     pub fn node_order_safe(&self) -> bool {
         match self.node() {
-            Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => true,
+            Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) | Node::NVar(_) => true,
             Node::App(f, x) => match self.set.order {
                 Order::ChildFirst => (*f == HOLE || *f < self.idx) && (*x == HOLE || *x < self.idx),
                 Order::ParentFirst => {
@@ -508,7 +521,7 @@ impl<'a> Expr<'a> {
                 Order::ParentFirst => *b == HOLE || *b > self.idx,
                 Order::Any => *b != self.idx,
             },
-            Node::NVar(_, link) => match self.set.order {
+            Node::NLinkVar(_, link) => match self.set.order {
                 Order::ChildFirst => *link == HOLE || *link < self.idx,
                 Order::ParentFirst => *link == HOLE || *link > self.idx,
                 Order::Any => *link != self.idx,
@@ -669,7 +682,8 @@ impl<'a> ExprMut<'a> {
                     .shift(incr_by, init_depth + 1, analyzed_free_vars);
                 self.set.add(Node::Lam(b, tag))
             }
-            Node::NVar(_name, _link) => {
+            Node::NVar(_) => self.idx,
+            Node::NLinkVar(_name, _link) => {
                 // let link = self
                 //     .get(link)
                 //     .shift(incr_by, init_depth, analyzed_free_vars);

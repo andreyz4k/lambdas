@@ -85,17 +85,20 @@ impl Analysis for ExprCost {
                 FxHashMap::default(),
                 FxHashMap::default(),
             ),
-            Node::NVar(name, link) => {
-                let cost = if *link == Idx::MAX {
-                    0
-                } else {
-                    analyzed.nodes[*link].0
-                };
+            Node::NLinkVar(name, link) => {
+                let cost = analyzed.nodes[*link].0;
                 let mut used_vars = FxHashMap::default();
                 let mut nvars_cost = FxHashMap::default();
                 used_vars.insert(name.clone(), 1);
                 nvars_cost.insert(name.clone(), cost);
                 (cost + analyzed.shared.cost_nvar, used_vars, nvars_cost)
+            }
+            Node::NVar(name) => {
+                let mut used_vars = FxHashMap::default();
+                let mut nvars_cost = FxHashMap::default();
+                used_vars.insert(name.clone(), 1);
+                nvars_cost.insert(name.clone(), 0);
+                (analyzed.shared.cost_nvar, used_vars, nvars_cost)
             }
             Node::App(f, x) => {
                 let (cost_f, mut used_vars_f, mut nvars_cost_f) = analyzed.nodes[*f].clone();
@@ -174,7 +177,7 @@ impl Analysis for DepthAnalysis {
             Node::Prim(_) => 1,
             Node::App(f, x) => 1 + std::cmp::max(analyzed.nodes[*f], analyzed.nodes[*x]),
             Node::Lam(b, _) => 1 + analyzed.nodes[*b],
-            Node::NVar(_, _) => 1,
+            Node::NVar(_) | Node::NLinkVar(_, _) => 1,
             Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
                 1 + std::cmp::max(analyzed.nodes[*def], analyzed.nodes[*body])
             }
@@ -201,7 +204,7 @@ impl Analysis for FreeVarAnalysis {
             Node::Lam(b, _) => {
                 free.extend(analyzed[*b].iter().filter(|i| **i > 0).map(|i| i - 1));
             }
-            Node::NVar(_, _) => {}
+            Node::NVar(_) | Node::NLinkVar(_, _) => {}
             Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
                 free.extend(analyzed[*def].iter());
                 free.extend(analyzed[*body].iter());
@@ -230,7 +233,7 @@ impl Analysis for IVarAnalysis {
             Node::Lam(b, _) => {
                 free.extend(analyzed[*b].iter());
             }
-            Node::NVar(_, _) => {}
+            Node::NVar(_) | Node::NLinkVar(_, _) => {}
             Node::Let { def, body, .. } | Node::RevLet { def, body, .. } => {
                 free.extend(analyzed[*def].iter());
                 free.extend(analyzed[*body].iter());

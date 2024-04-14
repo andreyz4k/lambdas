@@ -34,7 +34,8 @@ impl Display for Node {
                 Ok(())
             }
             Self::IVar(i) => write!(f, "#{}", i),
-            Node::NVar(name, _link) => write!(f, "${}", name),
+            Node::NVar(name) => write!(f, "${}", name),
+            Node::NLinkVar(name, _link) => write!(f, "${}", name),
             Node::Let { .. } => write!(f, "let"),
             Node::RevLet { .. } => write!(f, "revlet"),
         }
@@ -49,7 +50,11 @@ impl<'a> Display for Expr<'a> {
             }
 
             match e.node() {
-                Node::Var(_, _) | Node::IVar(_) | Node::Prim(_) | Node::NVar(_, _) => {
+                Node::Var(_, _)
+                | Node::IVar(_)
+                | Node::Prim(_)
+                | Node::NVar(_)
+                | Node::NLinkVar(_, _) => {
                     write!(f, "{}", e.node())
                 }
                 Node::App(fun, x) => {
@@ -164,7 +169,7 @@ fn parse_nvar(s: &str) -> IResult<&str, Vec<Node>> {
     map_res(
         preceded(tag("$"), take_while1(is_token_char)),
         |name: &str| -> Result<Vec<Node>, Error<&str>> {
-            Ok(vec![Node::NVar(name.into(), Idx::MAX)])
+            Ok(vec![Node::NLinkVar(name.into(), Idx::MAX)])
         },
     )(s)
 }
@@ -205,9 +210,27 @@ fn parse_app(s: &str) -> IResult<&str, Vec<Node>> {
             terminated(tuple((parse_program, many1(parse_program))), tag(")")),
         ),
         |(mut f, mut xs)| -> Result<Vec<Node>, Error<&str>> {
+            let rev_fix_symbol = crate::Symbol::from("rev_fix_param");
             let x_lengths = xs.iter().map(|x| x.len()).collect::<Vec<_>>();
             let mut lengths_sum: usize = x_lengths.iter().sum();
             let mut app_nodes = vec![];
+            if f.len() == 1 {
+                if let Node::Prim(n) = &f[0] {
+                    if *n == rev_fix_symbol {
+                        let fixer_var = xs[1][0].clone();
+                        if let Node::NLinkVar(fixer_name, _) = fixer_var {
+                            for x in xs[0].iter_mut() {
+                                if let Node::NLinkVar(name, _) = x {
+                                    if *name == fixer_name {
+                                        *x = Node::NVar(name.clone());
+                                    }
+                                }
+                            }
+                            xs[1] = vec![Node::NVar(fixer_name.clone())];
+                        }
+                    }
+                }
+            }
             for (i, x) in xs.iter_mut().enumerate() {
                 let node = if i == 0 {
                     Node::App(lengths_sum + 1, lengths_sum - x.len() + 1)
@@ -392,14 +415,14 @@ impl ExprSet {
         for node in nodes {
             // println!("node: {:?}", node);
             let norm_node = match node {
-                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) => node,
+                Node::Prim(_) | Node::Var(_, _) | Node::IVar(_) | Node::NVar(_) => node,
                 Node::App(f, x) => Node::App(items[items.len() - f], items[items.len() - x]),
                 Node::Lam(b, tag) => Node::Lam(items[items.len() - b], tag),
-                Node::NVar(ref name, _) => {
+                Node::NLinkVar(ref name, _) => {
                     if !mult_def_vars.contains(name) && named_vars_links.contains_key(name) {
-                        Node::NVar(name.clone(), named_vars_links[&name])
+                        Node::NLinkVar(name.clone(), named_vars_links[&name])
                     } else {
-                        node
+                        Node::NVar(name.clone())
                     }
                 }
                 Node::Let {

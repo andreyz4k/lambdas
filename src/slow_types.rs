@@ -464,7 +464,7 @@ impl<'a> Expr<'a> {
                 unimplemented!();
             }
             Node::Prim(p) => Ok(dsl.type_of_prim(p).instantiate(ctx)),
-            Node::NVar(_, _) => unimplemented!(),
+            Node::NVar(_) | Node::NLinkVar(_, _) => unimplemented!(),
             Node::Let { .. } => unimplemented!(),
             Node::RevLet { .. } => unimplemented!(),
         }
