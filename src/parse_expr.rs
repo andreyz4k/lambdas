@@ -124,7 +124,7 @@ impl Display for ExprOwned {
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_while, take_while1},
-    character::complete::{alphanumeric1, digit1, multispace0},
+    character::complete::{alphanumeric1, digit1, multispace0, space1},
     combinator::{eof, map_res, opt, recognize},
     error::Error,
     multi::{many0, many1, separated_list1},
@@ -283,6 +283,12 @@ fn parse_object(s: &str) -> IResult<&str, &str> {
                 tag("["),
                 parse_object,
                 many0(tuple((tag(","), multispace0, parse_object))),
+                tag("]"),
+            )),
+            tuple((
+                tag("["),
+                parse_object,
+                many0(tuple((alt((space1, tag(";"))), multispace0, parse_object))),
                 tag("]"),
             )),
         ))),
@@ -518,6 +524,21 @@ mod tests {
         assert_parse(set, "(lam (+ $0 b))", "(lam (+ $0 b))");
         assert_parse(set, "(lam (+ #0 b))", "(lam (+ #0 b))");
         assert_parse(set, "Const(list(int), Any[])", "Const(list(int), Any[])");
+        assert_parse(
+            set,
+            "Const(grid(color), Any[0 0 0])",
+            "Const(grid(color), Any[0 0 0])",
+        );
+        assert_parse(
+            set,
+            "Const(grid(color), Any[0, 0, 0])",
+            "Const(grid(color), Any[0, 0, 0])",
+        );
+        assert_parse(
+            set,
+            "Const(grid(color), Any[0 0 0; 0 0 0])",
+            "Const(grid(color), Any[0 0 0; 0 0 0])",
+        );
         assert_parse(set, "Const(int, -1)", "Const(int, -1)");
         assert_parse(set, "let $v1::int = 1 in $v1", "let $v1::int = 1 in $v1");
         assert_parse(
@@ -533,6 +554,11 @@ mod tests {
             let $v5::int = (- $v3 $v4) in let $v6::list(int) = (repeat $v1 $v5) in (concat $inp0 $v6)",
             "let $v1, $v2 = rev($inp0 = (cons $v1 $v2)) in let $v3::int = 0 in let $v4::int = Const(int, -1) in \
             let $v5::int = (- $v3 $v4) in let $v6::list(int) = (repeat $v1 $v5) in (concat $inp0 $v6)"
+        );
+        assert_parse(
+            set,
+            "let $v1::grid(color) = Const(grid(color), Any[0 0 0]) in let $v2 = rev($inp0 = (dreamcoder_abstraction_1 $v2)) in let $v3, $v4 = rev($v2 = (cons $v3 $v4)) in let $v5::list(list(color)) = (reverse $v4) in (dreamcoder_abstraction_9 $v1 $v5)",
+            "let $v1::grid(color) = Const(grid(color), Any[0 0 0]) in let $v2 = rev($inp0 = (dreamcoder_abstraction_1 $v2)) in let $v3, $v4 = rev($v2 = (cons $v3 $v4)) in let $v5::list(list(color)) = (reverse $v4) in (dreamcoder_abstraction_9 $v1 $v5)",
         );
 
         let e = set.parse_extend("$3").unwrap();
