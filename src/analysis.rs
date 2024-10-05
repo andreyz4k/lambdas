@@ -124,7 +124,7 @@ impl Analysis for ExprCost {
                 let (cost_body, mut used_vars_body, mut nvars_cost_body) =
                     analyzed.nodes[*body].clone();
                 let cost = analyzed.shared.cost_let + cost_def + cost_body
-                    - cost_def * used_vars_body[&var];
+                    - cost_def * used_vars_body[var];
                 used_vars_def.into_iter().for_each(|(k, v)| {
                     used_vars_body
                         .entry(k)

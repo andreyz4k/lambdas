@@ -418,7 +418,7 @@ impl ExprSet {
                 Node::Lam(b, tag) => Node::Lam(items[items.len() - b], tag),
                 Node::NLinkVar(ref name, _) => {
                     if !mult_def_vars.contains(name) && named_vars_links.contains_key(name) {
-                        Node::NLinkVar(name.clone(), named_vars_links[&name])
+                        Node::NLinkVar(name.clone(), named_vars_links[name])
                     } else {
                         Node::NVar(name.clone())
                     }

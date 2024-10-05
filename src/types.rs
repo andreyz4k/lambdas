@@ -323,6 +323,7 @@ impl Type {
     /// get our node and shift.
     /// - If we are not a Var we just return our own node and shift.
     /// - If we are a Var we lookup what it points to in the subst (when our shift is added) and return that, not applying our own shift.
+    ///
     /// inline(always) is extremely important here by the way
     #[inline(always)]
     pub fn node<'a>(&self, set: &'a TypeSet) -> (&'a TNode, Type) {
