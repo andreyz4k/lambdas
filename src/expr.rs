@@ -30,7 +30,6 @@ pub enum Node {
     Let {
         // let expression
         var: Symbol,
-        type_str: Symbol,
         def: Idx,
         body: Idx,
     },
@@ -374,14 +373,8 @@ impl<'a> Expr<'a> {
                 Node::NLinkVar(name, link) => {
                     Node::NLinkVar(name.clone(), (*link as i32 + shift) as usize)
                 }
-                Node::Let {
-                    var,
-                    type_str,
-                    def,
-                    body,
-                } => Node::Let {
+                Node::Let { var, def, body } => Node::Let {
                     var: var.clone(),
-                    type_str: type_str.clone(),
                     def: (*def as i32 + shift) as usize,
                     body: (*body as i32 + shift) as usize,
                 },
@@ -463,18 +456,12 @@ impl<'a> Expr<'a> {
                         // other_set.add(e.node().clone())
                     }
                 }
-                Node::Let {
-                    var,
-                    type_str,
-                    def,
-                    body,
-                } => {
+                Node::Let { var, def, body } => {
                     let def = helper(e.get(*def), other_set, new_vars_mapping, mult_def_vars);
                     new_vars_mapping.insert(var.clone(), def);
                     let body = helper(e.get(*body), other_set, new_vars_mapping, mult_def_vars);
                     other_set.add(Node::Let {
                         var: var.clone(),
-                        type_str: type_str.clone(),
                         def,
                         body,
                     })
@@ -690,22 +677,12 @@ impl<'a> ExprMut<'a> {
                 // self.set.add(Node::NVar(name, link))
                 self.idx
             }
-            Node::Let {
-                var,
-                type_str,
-                def,
-                body,
-            } => {
+            Node::Let { var, def, body } => {
                 let def = self.get(def).shift(incr_by, init_depth, analyzed_free_vars);
                 let body = self
                     .get(body)
                     .shift(incr_by, init_depth, analyzed_free_vars);
-                self.set.add(Node::Let {
-                    var,
-                    type_str,
-                    def,
-                    body,
-                })
+                self.set.add(Node::Let { var, def, body })
             }
             Node::RevLet {
                 inp_var,
